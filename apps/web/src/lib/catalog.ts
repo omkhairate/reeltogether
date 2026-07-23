@@ -1,0 +1,31 @@
+import type { ActivityItem, MediaItem } from "./types";
+
+export const mediaCatalog: MediaItem[] = [
+  { id: "holdovers", kind: "movie", title: "The Holdovers", year: 2023, runtime: "2h 13m", rating: 7.9, genres: ["Comedy", "Drama"], language: "English", providers: ["JioHotstar"], image: "https://image.tmdb.org/t/p/w780/VHSzNBTwxV8vh7wylo7O9CLdac.jpg", summary: "A grumpy professor stays behind at a boarding school over winter break." },
+  { id: "bear", kind: "show", title: "The Bear", year: 2022, runtime: "3 seasons", rating: 8.5, genres: ["Comedy", "Drama"], language: "English", providers: ["Disney+"], image: "https://image.tmdb.org/t/p/w780/sHFlb2qXSeoGzZzM3A3vVdrpJK9.jpg", summary: "A young chef fights to transform his family’s chaotic Chicago sandwich shop." },
+  { id: "past-lives", kind: "movie", title: "Past Lives", year: 2023, runtime: "1h 46m", rating: 7.8, genres: ["Drama", "Romance"], language: "English", providers: ["Netflix"], image: "https://image.tmdb.org/t/p/w780/k3waqVXSnvCZWfJYNtdamTgTtTA.jpg", summary: "Two childhood friends reconnect in New York after decades apart." },
+  { id: "fleabag", kind: "show", title: "Fleabag", year: 2016, runtime: "2 seasons", rating: 8.7, genres: ["Comedy", "Drama"], language: "English", providers: ["Prime Video"], image: "https://image.tmdb.org/t/p/w780/27vEYsRKa3UnaNNMCN41UsjL9hn.jpg", summary: "A sharp, funny woman navigates family, grief, and modern life in London." },
+  { id: "parasite", kind: "movie", title: "Parasite", year: 2019, runtime: "2h 12m", rating: 8.5, genres: ["Thriller", "Drama"], language: "Korean", providers: ["Prime Video"], image: "https://image.tmdb.org/t/p/w780/7IiTTgloJzvGI1TAYymCfbfl3vT.jpg", summary: "A struggling family slowly enters the orbit of a wealthy household." },
+  { id: "dark", kind: "show", title: "Dark", year: 2017, runtime: "3 seasons", rating: 8.7, genres: ["Mystery", "Sci-Fi"], language: "German", providers: ["Netflix"], image: "https://image.tmdb.org/t/p/w780/apbrbWs8M9lyOpJYU5WXrpFbk1Z.jpg", summary: "A missing child exposes a small town’s secrets across several generations." },
+  { id: "spirited-away", kind: "movie", title: "Spirited Away", year: 2001, runtime: "2h 5m", rating: 8.5, genres: ["Animation", "Fantasy"], language: "Japanese", providers: ["Netflix"], image: "https://image.tmdb.org/t/p/w780/39wmItIWsg5sZMyRUHLkWBcuVCM.jpg", summary: "A young girl enters a spirit world and must find her courage to return home." },
+  { id: "severance", kind: "show", title: "Severance", year: 2022, runtime: "2 seasons", rating: 8.7, genres: ["Drama", "Sci-Fi"], language: "English", providers: ["Apple TV+"], image: "https://image.tmdb.org/t/p/w780/pPHpeI2X1qEd1CS1SeyrdhZ4qnT.jpg", summary: "Office workers undergo a procedure that separates their work and personal memories." },
+];
+
+export const activityCatalog: ActivityItem[] = [
+  { id: "pottery", kind: "activity", title: "Pottery workshop", category: "Creative", budget: "€€", duration: "2h", distanceKm: 6, location: "Local studio", vibes: ["Cozy", "Hands-on"], image: "https://images.unsplash.com/photo-1610701596007-11502861dcfa?auto=format&fit=crop&w=1200&q=85", summary: "Learn wheel throwing together and take home something beautifully imperfect." },
+  { id: "sunrise-hike", kind: "activity", title: "Sunrise hike", category: "Outdoors", budget: "Free", duration: "3h", distanceKm: 12, location: "Hill trail", vibes: ["Active", "Scenic"], image: "https://images.unsplash.com/photo-1551632811-561732d1e306?auto=format&fit=crop&w=1200&q=85", summary: "Pack breakfast, start early, and reach the viewpoint before the city wakes." },
+  { id: "food-crawl", kind: "activity", title: "Street-food crawl", category: "Food", budget: "€", duration: "2h", distanceKm: 4, location: "Old market", vibes: ["Casual", "Tasty"], image: "https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=1200&q=85", summary: "Pick a neighbourhood and split one signature dish at every stop." },
+  { id: "museum", kind: "activity", title: "Museum afternoon", category: "Culture", budget: "€", duration: "3h", distanceKm: 8, location: "City museum", vibes: ["Slow", "Curious"], image: "https://images.unsplash.com/photo-1561214115-f2f134cc4912?auto=format&fit=crop&w=1200&q=85", summary: "Wander without a route and each choose one artwork for the other." },
+  { id: "picnic", kind: "activity", title: "Make-it-yourself picnic", category: "Food", budget: "€", duration: "2h", distanceKm: 3, location: "Riverside park", vibes: ["Relaxed", "Sunny"], image: "https://images.unsplash.com/photo-1526392060635-9d6019884377?auto=format&fit=crop&w=1200&q=85", summary: "Bring one homemade thing each and find the best patch of afternoon sun." },
+  { id: "climbing", kind: "activity", title: "Indoor climbing", category: "Active", budget: "€€", duration: "2h", distanceKm: 10, location: "Climbing gym", vibes: ["Playful", "Active"], image: "https://images.unsplash.com/photo-1522163182402-834f871fd851?auto=format&fit=crop&w=1200&q=85", summary: "Try beginner routes, cheer loudly, and finish with something cold to drink." },
+  { id: "train-trip", kind: "activity", title: "Mystery train day", category: "Travel", budget: "€€€", duration: "Full day", distanceKm: 25, location: "Central station", vibes: ["Spontaneous", "Explore"], image: "https://images.unsplash.com/photo-1473445361085-b9a07f55608b?auto=format&fit=crop&w=1200&q=85", summary: "Choose a train under two hours, get off somewhere new, and improvise the day." },
+  { id: "game-night", kind: "activity", title: "Board-game café", category: "Games", budget: "€", duration: "3h", distanceKm: 5, location: "Game café", vibes: ["Competitive", "Indoor"], image: "https://images.unsplash.com/photo-1610890716171-6b1bb98ffd09?auto=format&fit=crop&w=1200&q=85", summary: "Pick one cooperative game and one game that might ruin the friendship briefly." },
+];
+
+export const filterOptions = {
+  genres: [...new Set(mediaCatalog.flatMap((item) => item.genres))].sort(),
+  languages: [...new Set(mediaCatalog.map((item) => item.language))].sort(),
+  providers: [...new Set(mediaCatalog.flatMap((item) => item.providers))].sort(),
+  activityCategories: [...new Set(activityCatalog.map((item) => item.category))].sort(),
+  budgets: ["Free", "€", "€€", "€€€"],
+};

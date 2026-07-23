@@ -2493,6 +2493,8 @@ function FiltersSheet({
   onSave: (filters: DiscoveryFilters) => void;
 }) {
   const [draft, setDraft] = useState({ ...filters, region: filters.region || deviceRegion() });
+  const detectedRegion = deviceRegion();
+  const regionValues = [...new Set([detectedRegion, draft.region, "US", "GB", "IN", "CA", "AU", "DE", "FR", "ES", "IT", "NL", "SE", "NO", "DK", "BR", "MX", "JP", "KR", "SG", "NZ"])];
   const mediaOptions = {
     genres: [...new Set([...filterOptions.genres, ...mediaItems.flatMap((item) => item.genres)])].sort(),
     languages: [...new Set([...filterOptions.languages, ...mediaItems.map((item) => item.language)])].sort(),
@@ -2528,10 +2530,10 @@ function FiltersSheet({
           <>
             <FilterGroup
               title="Country for streaming"
-              values={[...new Set([draft.region, "US", "GB", "IN", "CA", "AU", "DE", "FR", "ES", "IT", "NL", "SE", "NO", "DK", "BR", "MX", "JP", "KR", "SG", "NZ"])]}
+              values={regionValues}
               selected={[draft.region]}
               onToggle={(value) => setDraft({ ...draft, region: value })}
-              labels={Object.fromEntries([...new Set([draft.region, "US", "GB", "IN", "CA", "AU", "DE", "FR", "ES", "IT", "NL", "SE", "NO", "DK", "BR", "MX", "JP", "KR", "SG", "NZ"])].map((region) => [region, regionName(region)]))}
+              labels={Object.fromEntries(regionValues.map((region) => [region, `${regionName(region)}${region === detectedRegion ? " · This device" : ""}`]))}
             />
             <FilterGroup
               title="Type"

@@ -1,6 +1,14 @@
 export type ContentMode = "watch" | "activities" | "mixed";
 export type ContentKind = "movie" | "show" | "activity";
 export type VoteDecision = "pick" | "pass";
+export type PairEventType =
+  | "tonight"
+  | "nudge"
+  | "wildcard"
+  | "plan"
+  | "confirm"
+  | "complete"
+  | "rating";
 
 export type MediaItem = {
   id: string;
@@ -57,11 +65,22 @@ export type Vote = {
   decision: VoteDecision;
 };
 
+export type PairEvent = {
+  id: string;
+  userId: string;
+  type: PairEventType;
+  itemId: string;
+  kind: ContentKind | "";
+  payload: Record<string, string | number | boolean>;
+  updatedAt: string;
+};
+
 export type SessionSnapshot = {
   user: Member;
   list: SharedList;
   members: Member[];
   votes: Vote[];
+  events: PairEvent[];
 };
 
 export const defaultFilters: DiscoveryFilters = {

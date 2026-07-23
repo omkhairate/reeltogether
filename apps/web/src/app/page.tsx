@@ -104,6 +104,15 @@ function deviceRegion() {
 function deviceFilters(): DiscoveryFilters {
   return { ...defaultFilters, region: deviceRegion() };
 }
+function inviteErrorMessage(reason: unknown) {
+  const message = reason instanceof Error ? reason.message : "";
+  const normalized = message.toLowerCase();
+  if (normalized.includes("pair is already complete"))
+    return "This shared space already has its two people. Ask your friend for a new invite if this doesn’t look right.";
+  if (normalized.includes("invalid") || normalized.includes("uuid"))
+    return "This invite link doesn’t look valid. Ask your friend to share it again from ReelTogether.";
+  return message || "We couldn’t join the shared space. Please try the invite again.";
+}
 
 function createLocalSession(
   displayName: string,
@@ -165,6 +174,7 @@ export default function ReelTogetherApp() {
   const [catalogNotice, setCatalogNotice] = useState("");
   const [showAddActivity, setShowAddActivity] = useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [showPairWelcome, setShowPairWelcome] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
@@ -220,7 +230,14 @@ export default function ReelTogetherApp() {
           localStorage.removeItem(STORAGE_KEY);
           return;
         }
-        if (parsed && parsed.user.id === currentIdentity.id) {
+        if (pending?.inviteCode) {
+          const user = await ensureCloudUser(pending.name);
+          const listId = await joinCloudList(pending.inviteCode);
+          setSession(await loadCloudSnapshot(user, listId));
+          setShowPairWelcome(true);
+          localStorage.removeItem(PENDING_SETUP_KEY);
+          history.replaceState({}, "", window.location.pathname);
+        } else if (parsed && parsed.user.id === currentIdentity.id) {
           setSession(await loadCloudSnapshot(parsed.user, parsed.list.id));
           localStorage.removeItem(PENDING_SETUP_KEY);
         } else {
@@ -230,9 +247,7 @@ export default function ReelTogetherApp() {
             localStorage.removeItem(PENDING_SETUP_KEY);
           } else if (pending) {
             const user = await ensureCloudUser(pending.name);
-            const listId = pending.inviteCode
-              ? await joinCloudList(pending.inviteCode)
-              : await createCloudList(user, pending.listName || "Our shared list", deviceFilters());
+            const listId = await createCloudList(user, pending.listName || "Our shared list", deviceFilters());
             setSession(await loadCloudSnapshot(user, listId));
             localStorage.removeItem(PENDING_SETUP_KEY);
             history.replaceState({}, "", window.location.pathname);
@@ -244,6 +259,7 @@ export default function ReelTogetherApp() {
       } catch (reason) {
         console.error(reason);
         localStorage.removeItem(STORAGE_KEY);
+        if (pending?.inviteCode) setError(inviteErrorMessage(reason));
       } finally {
         setLoading(false);
       }
@@ -626,11 +642,13 @@ export default function ReelTogetherApp() {
       notify("Connect Supabase before inviting a friend");
       return;
     }
-    const url = new URL(window.location.href);
-    url.search = `?join=${session.list.inviteCode}`;
+    const url = new URL(`${window.location.origin}${window.location.pathname}`);
+    url.searchParams.set("join", session.list.inviteCode);
+    url.searchParams.set("from", session.user.displayName);
+    url.searchParams.set("list", session.list.name);
     const shareData = {
       title: `Join ${session.list.name}`,
-      text: "Swipe films, shows, and things to do with me.",
+      text: `${session.user.displayName} saved you a seat in ${session.list.name} — your private place to find things you’ll both love.`,
       url: url.toString(),
     };
     try {
@@ -650,13 +668,18 @@ export default function ReelTogetherApp() {
       <>
         <Onboarding
           identity={identity}
-          onComplete={(next) => {
+          onComplete={(next, joined) => {
             setSession(next);
+            setShowPairWelcome(joined);
             if (cloudConfigured) void getCloudIdentity().then(setIdentity);
           }}
           onError={setError}
           onInstall={installApp}
-          onSignIn={() => { setAccountMode("signin"); setShowAccount(true); }}
+          onSignIn={(setup) => {
+            setPendingSetup(setup ?? null);
+            setAccountMode("signin");
+            setShowAccount(true);
+          }}
           onCreateAccount={(setup) => {
             setPendingSetup(setup);
             setAccountMode("signup");
@@ -763,6 +786,24 @@ export default function ReelTogetherApp() {
         )}
       </div>
       <TabBar view={view} matchCount={matches.length} onNavigate={setView} />
+      {showPairWelcome && (
+        <PairWelcome
+          session={session}
+          secured={Boolean(identity && !identity.isAnonymous)}
+          onStart={() => {
+            setShowPairWelcome(false);
+            setView("discover");
+          }}
+          onSecure={() => {
+            void getCloudIdentity().then((current) => {
+              setIdentity(current);
+              setShowPairWelcome(false);
+              setAccountMode("manage");
+              setShowAccount(true);
+            });
+          }}
+        />
+      )}
       {showFilters && (
         <FiltersSheet
           filters={session.list.filters}
@@ -908,10 +949,10 @@ function Onboarding({
   isInstalled,
 }: {
   identity: CloudIdentity | null;
-  onComplete: (session: SessionSnapshot) => void;
+  onComplete: (session: SessionSnapshot, joined: boolean) => void;
   onError: (message: string) => void;
   onInstall: () => void;
-  onSignIn: () => void;
+  onSignIn: (setup?: PendingSetup) => void;
   onCreateAccount: (setup: PendingSetup) => void;
   isInstalled: boolean;
 }) {
@@ -922,6 +963,14 @@ function Onboarding({
     typeof window === "undefined"
       ? ""
       : (new URLSearchParams(window.location.search).get("join") ?? "");
+  const inviteFrom =
+    typeof window === "undefined"
+      ? ""
+      : (new URLSearchParams(window.location.search).get("from") ?? "").trim().slice(0, 40);
+  const inviteList =
+    typeof window === "undefined"
+      ? ""
+      : (new URLSearchParams(window.location.search).get("list") ?? "").trim().slice(0, 60);
   const accountReady = Boolean(identity && !identity.isAnonymous);
 
   async function submit() {
@@ -931,6 +980,7 @@ function Onboarding({
       if (!cloudConfigured) {
         onComplete(
           createLocalSession(name.trim(), listName.trim() || "Our shared list"),
+          false,
         );
         return;
       }
@@ -938,14 +988,16 @@ function Onboarding({
       const listId = inviteCode
         ? await joinCloudList(inviteCode)
         : await createCloudList(user, listName.trim() || "Our shared list", deviceFilters());
-      onComplete(await loadCloudSnapshot(user, listId));
+      onComplete(await loadCloudSnapshot(user, listId), Boolean(inviteCode));
       localStorage.removeItem(PENDING_SETUP_KEY);
       history.replaceState({}, "", window.location.pathname);
     } catch (reason) {
       onError(
-        reason instanceof Error
-          ? reason.message
-          : "Could not get your shared list ready.",
+        inviteCode
+          ? inviteErrorMessage(reason)
+          : reason instanceof Error
+            ? reason.message
+            : "Could not get your shared list ready.",
       );
     } finally {
       setBusy(false);
@@ -954,29 +1006,47 @@ function Onboarding({
 
   return (
     <main className="onboarding">
-      <section className="onboarding-card">
+      <section className={`onboarding-card ${inviteCode ? "invite-onboarding-card" : ""}`}>
         <div className="brand">
           <img src={`${basePath}/icons/brand-mark.png`} alt="" />
           <strong>reeltogether</strong>
         </div>
-        <div className="onboarding-copy">
-          <p>{inviteCode ? "YOU’VE BEEN INVITED" : accountReady ? "ACCOUNT READY" : "PICK TOGETHER"}</p>
-          <h1>
-            {inviteCode ? "Join your friend’s list." : accountReady ? "Finish your setup." : "Decide what’s next."}
-          </h1>
-          <span>
-            {accountReady
-              ? `You’re signed in as ${identity?.email}. Add your name and create the first shared list.`
-              : "Swipe films, shows, and things to do privately. When you both choose the same idea, it becomes a match."}
-          </span>
-        </div>
+        {inviteCode ? (
+          <div className="invite-welcome">
+            <div className="invite-pair" aria-hidden="true">
+              <span>{initials(inviteFrom || "Your person")}</span>
+              <i><Sparkles size={17} /></i>
+              <span>YOU</span>
+            </div>
+            <p>A PRIVATE INVITE</p>
+            <h1>{inviteFrom ? `${inviteFrom} saved you a seat.` : "Someone saved you a seat."}</h1>
+            <span>
+              Join <strong>{inviteList || "your shared list"}</strong>—a small space for the two of you to find what to watch and do next.
+            </span>
+            <div className="invite-promises">
+              <span><EyeOff size={15} /> Your picks stay private</span>
+              <span><Sparkles size={15} /> Shared picks become matches</span>
+            </div>
+          </div>
+        ) : (
+          <div className="onboarding-copy">
+            <p>{accountReady ? "ACCOUNT READY" : "PICK TOGETHER"}</p>
+            <h1>{accountReady ? "Finish your setup." : "Decide what’s next."}</h1>
+            <span>
+              {accountReady
+                ? `You’re signed in as ${identity?.email}. Add your name and create the first shared list.`
+                : "Swipe films, shows, and things to do privately. When you both choose the same idea, it becomes a match."}
+            </span>
+          </div>
+        )}
         <label>
-          Your name
+          {inviteCode && inviteFrom ? `What should ${inviteFrom} call you?` : "Your name"}
           <input
             autoComplete="name"
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder="What should your friend see?"
+            placeholder={inviteCode ? "Your nickname" : "What should your friend see?"}
+            autoFocus={Boolean(inviteCode)}
           />
         </label>
         {!inviteCode && (
@@ -996,7 +1066,7 @@ function Onboarding({
           {busy
             ? "Getting things ready…"
             : inviteCode
-              ? "Join shared list"
+              ? `Join ${inviteFrom || "your person"}`
               : accountReady
                 ? "Finish setup"
                 : "Create shared list"}
@@ -1005,7 +1075,7 @@ function Onboarding({
           <div className="account-ready-note"><ShieldCheck size={16} /> Account created successfully</div>
         )}
         {cloudConfigured && !accountReady && (
-          <div className="account-choices">
+          <div className={`account-choices ${inviteCode ? "invite-account-choices" : ""}`}>
             <button className="account-create" onClick={() => {
               if (name.trim().length < 2) {
                 onError("Add your name first so we can finish your account after the email link.");
@@ -1013,18 +1083,30 @@ function Onboarding({
               }
               onCreateAccount({
                 name: name.trim(),
-                listName: listName.trim() || "Our shared list",
+                listName: inviteCode
+                  ? inviteList || "Our shared list"
+                  : listName.trim() || "Our shared list",
                 inviteCode,
               });
             }}>
               <CircleUserRound size={17} /> Create an account
             </button>
-            <button className="account-shortcut" onClick={onSignIn}>
-              Already have one? <strong>Sign in</strong>
+            <button className="account-shortcut" onClick={() => {
+              if (inviteCode && name.trim().length < 2) {
+                onError(`Add the name ${inviteFrom || "your friend"} should see first.`);
+                return;
+              }
+              onSignIn(inviteCode ? {
+                name: name.trim(),
+                listName: inviteList || "Our shared list",
+                inviteCode,
+              } : undefined);
+            }}>
+              {inviteCode ? "Already have ReelTogether?" : "Already have one?"} <strong>Sign in</strong>
             </button>
           </div>
         )}
-        {!isInstalled && (
+        {!isInstalled && !inviteCode && (
           <button className="install-shortcut" onClick={onInstall}>
             <Download size={17} /> Install ReelTogether
           </button>
@@ -1037,6 +1119,54 @@ function Onboarding({
         </div>
       </section>
     </main>
+  );
+}
+
+function PairWelcome({
+  session,
+  secured,
+  onStart,
+  onSecure,
+}: {
+  session: SessionSnapshot;
+  secured: boolean;
+  onStart: () => void;
+  onSecure: () => void;
+}) {
+  const friend = session.members.find((member) => member.id !== session.user.id);
+  return (
+    <div className="pair-welcome-backdrop" role="dialog" aria-modal="true" aria-labelledby="pair-welcome-title">
+      <section className="pair-welcome-card">
+        <div className="welcome-sparkles" aria-hidden="true">
+          <Sparkles size={18} />
+          <Sparkles size={12} />
+          <Sparkles size={15} />
+        </div>
+        <div className="connected-pair" aria-hidden="true">
+          <span>{initials(friend?.displayName || "Friend")}</span>
+          <i><Check size={18} /></i>
+          <span>{initials(session.user.displayName)}</span>
+        </div>
+        <p>YOU’RE IN</p>
+        <h2 id="pair-welcome-title">
+          {friend ? `${friend.displayName} + ${session.user.displayName}` : "Your shared space is ready"}
+        </h2>
+        <strong>Welcome to {session.list.name}.</strong>
+        <span>
+          Pick honestly—your choices stay hidden until you both choose the same thing. Then it’s a match.
+        </span>
+        <div className="welcome-actions">
+          <button className="primary-button" onClick={onStart}>
+            <Sparkles size={17} /> Start picking together
+          </button>
+          {!secured && (
+            <button className="secure-later-button" onClick={onSecure}>
+              <ShieldCheck size={16} /> Keep my spot safe with email
+            </button>
+          )}
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -2273,15 +2403,16 @@ function AccountSheet({
     setMessage("");
     try {
       const redirect = new URL(`${window.location.origin}${window.location.pathname}`);
-      if (mode === "signup" && pendingSetup) {
-        const serialized = JSON.stringify(pendingSetup);
-        localStorage.setItem(PENDING_SETUP_KEY, serialized);
-        redirect.searchParams.set("setup", serialized);
+      let serializedSetup = "";
+      if ((mode === "signup" || mode === "signin") && pendingSetup) {
+        serializedSetup = JSON.stringify(pendingSetup);
+        redirect.searchParams.set("setup", serializedSetup);
       }
       const redirectTo = redirect.toString();
       if (securing) await secureCloudAccount(email, redirectTo);
       else if (mode === "signup") await sendCloudSignUpLink(email, redirectTo);
       else await sendCloudSignInLink(email, redirectTo);
+      if (serializedSetup) localStorage.setItem(PENDING_SETUP_KEY, serializedSetup);
       setSent(true);
     } catch (reason) {
       setMessage(

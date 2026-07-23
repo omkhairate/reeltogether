@@ -1669,6 +1669,62 @@ img {
   color: var(--coral);
   border-color: rgba(239, 127, 117, 0.2);
 }
+.account-manage > .outline-button { width: 100%; margin-top: 8px; }
+.account-safety-note,
+.magic-link-fallback { margin-top: 10px; text-align: center; }
+.delete-account-trigger { display: flex; margin: 18px auto 0; align-items: center; gap: 5px; }
+.delete-account-confirm { margin-top: 17px; padding: 12px; border: 1px solid rgba(239, 127, 117, .22); border-radius: 13px; background: #fff7f5; }
+.delete-account-confirm b { display: block; color: #8c3c36; font-size: 11px; }
+.delete-account-confirm small { margin-top: 4px; font-size: 9px; }
+.delete-account-confirm > div { display: flex; justify-content: flex-end; gap: 7px; margin-top: 7px; }
+.delete-account-confirm .text-button { margin: 0; padding: 7px; }
+.account-sheet .otp-input {
+  height: 58px;
+  text-align: center;
+  font-size: 25px;
+  font-weight: 850;
+  letter-spacing: 9px;
+  font-variant-numeric: tabular-nums;
+}
+.email-sent .text-button { display: block; width: 100%; margin-top: 5px; }
+.account-conflict {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 9px;
+  margin-top: 12px;
+  padding: 12px;
+  color: #2a6f69;
+  border: 1px solid rgba(61, 167, 162, .2);
+  border-radius: 13px;
+  background: rgba(61, 167, 162, .08);
+}
+.account-conflict b { display: block; font-size: 11px; }
+.account-conflict small { margin-top: 3px; font-size: 9px; }
+.account-conflict .outline-button { grid-column: 1 / -1; width: 100%; color: #2a6f69; border-color: rgba(61, 167, 162, .25); }
+.space-switcher {
+  margin: 14px 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, .7);
+}
+.space-switcher .collection-heading { margin-bottom: 9px; }
+.space-switcher-list { display: grid; gap: 7px; }
+.space-switcher-list button {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 9px;
+  min-height: 45px;
+  padding: 8px 10px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: white;
+}
+.space-switcher-list button > span { display: grid; width: 29px; height: 29px; place-items: center; color: var(--purple); border-radius: 9px; background: var(--purple-soft); }
+.space-switcher-list button b { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.space-switcher-list button.active { color: var(--purple); border-color: rgba(107, 80, 198, .26); background: var(--purple-soft); }
 .form-message {
   margin-top: 11px;
   padding: 10px 12px;
@@ -1834,6 +1890,7 @@ img {
 .account-create { display: flex; width: 100%; min-height: 43px; align-items: center; justify-content: center; gap: 7px; color: var(--purple); border: 1px solid rgba(107,80,198,.22); border-radius: 13px; background: var(--purple-soft); font-size: 11px; font-weight: 850; }
 .account-choices .account-shortcut { min-height: 34px; margin: 0; padding: 6px 3px; font-size: 10px; }
 .account-ready-note { display: flex; min-height: 38px; align-items: center; justify-content: center; gap: 7px; margin-top: 10px; color: #277b72; border-radius: 12px; background: rgba(61,167,162,.09); font-size: 10px; font-weight: 800; }
+.guest-explainer { display: block; margin: 8px 8px 2px; color: var(--muted); text-align: center; font-size: 9px; line-height: 1.4; }
 .discover-actions { display: flex; gap: 7px; }
 .discover-actions > button { position: relative; display: grid; width: 40px; height: 40px; place-items: center; color: var(--purple); border: 1px solid var(--line); border-radius: 13px; background: white; box-shadow: var(--shadow); }
 .discover-actions button i { position: absolute; top: -4px; right: -4px; display: grid; min-width: 17px; height: 17px; padding: 0 4px; place-items: center; color: white; border: 2px solid var(--paper); border-radius: 10px; background: var(--purple); font-size: 8px; font-style: normal; font-weight: 850; }

@@ -8,7 +8,8 @@
     "dev:web": "cd apps/web && NEXT_TELEMETRY_DISABLED=1 node ../../node_modules/.bin/next dev --hostname 127.0.0.1 --port 3000",
     "build": "npm run build --workspace @toru/web",
     "typecheck": "npm run typecheck --workspace @toru/web",
-    "lint": "npm run lint --workspace @toru/web"
+    "lint": "npm run lint --workspace @toru/web",
+    "test": "npm run test --workspace @toru/web"
   },
   "workspaces": [
     "apps/web"

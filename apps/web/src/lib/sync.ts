@@ -1,5 +1,6 @@
 import {
   createClient,
+  type AuthChangeEvent,
   type RealtimeChannel,
   type SupabaseClient,
 } from "@supabase/supabase-js";
@@ -31,6 +32,24 @@ export type CloudIdentity = {
   email: string | null;
   isAnonymous: boolean;
 };
+
+export type CloudListSummary = {
+  id: string;
+  name: string;
+  joinedAt: string;
+};
+
+function identityFromUser(user: {
+  id: string;
+  email?: string;
+  is_anonymous?: boolean;
+}): CloudIdentity {
+  return {
+    id: user.id,
+    email: user.email ?? null,
+    isAnonymous: user.is_anonymous ?? !user.email,
+  };
+}
 
 function requireCloud() {
   if (!supabase) throw new Error("Shared syncing has not been configured yet.");
@@ -93,11 +112,47 @@ export async function getCloudIdentity(): Promise<CloudIdentity | null> {
   }
   const user = data.user;
   if (!user) return null;
-  return {
-    id: user.id,
-    email: user.email ?? null,
-    isAnonymous: user.is_anonymous ?? !user.email,
-  };
+  return identityFromUser(user);
+}
+
+export function subscribeToCloudAuth(
+  onChange: (event: AuthChangeEvent, identity: CloudIdentity | null) => void,
+) {
+  const client = requireCloud();
+  const { data } = client.auth.onAuthStateChange((event, session) => {
+    // Supabase recommends keeping this callback synchronous. Moving our React
+    // update to a microtask also avoids auth-lock deadlocks during token refresh.
+    queueMicrotask(() =>
+      onChange(event, session?.user ? identityFromUser(session.user) : null),
+    );
+  });
+  return () => data.subscription.unsubscribe();
+}
+
+export async function verifyCloudOtp(
+  email: string,
+  token: string,
+  type: "email" | "email_change",
+): Promise<CloudIdentity> {
+  const client = requireCloud();
+  const { data, error } = await client.auth.verifyOtp({
+    email: email.trim().toLowerCase(),
+    token: token.replace(/\s/g, ""),
+    type,
+  });
+  if (error) throw error;
+  if (!data.user) throw new Error("That code could not be verified.");
+  return identityFromUser(data.user);
+}
+
+export async function resendCloudEmailChange(email: string, redirectTo: string) {
+  const client = requireCloud();
+  const { error } = await client.auth.resend({
+    type: "email_change",
+    email: email.trim().toLowerCase(),
+    options: { emailRedirectTo: redirectTo },
+  });
+  if (error) throw error;
 }
 
 export async function restoreCloudList(listId: string): Promise<SessionSnapshot | null> {
@@ -145,6 +200,66 @@ export async function restoreCloudAccount(): Promise<SessionSnapshot | null> {
   return loadCloudSnapshot(user, String(listId));
 }
 
+export async function listCloudAccounts(): Promise<CloudListSummary[]> {
+  const client = requireCloud();
+  const identity = await getCloudIdentity();
+  if (!identity) return [];
+  const { data: memberships, error: membershipError } = await client
+    .from("list_members")
+    .select("list_id,joined_at")
+    .eq("user_id", identity.id)
+    .order("joined_at", { ascending: false });
+  if (membershipError) throw membershipError;
+  const ids = (memberships ?? []).map((row) => String(row.list_id));
+  if (!ids.length) return [];
+  const { data: lists, error: listError } = await client
+    .from("shared_lists")
+    .select("id,name")
+    .in("id", ids);
+  if (listError) throw listError;
+  const byId = new Map((lists ?? []).map((row) => [String(row.id), String(row.name)]));
+  return (memberships ?? [])
+    .filter((row) => byId.has(String(row.list_id)))
+    .map((row) => ({
+      id: String(row.list_id),
+      name: byId.get(String(row.list_id))!,
+      joinedAt: String(row.joined_at),
+    }));
+}
+
+export async function updateCloudDisplayName(displayName: string) {
+  const client = requireCloud();
+  const identity = await getCloudIdentity();
+  if (!identity) throw new Error("Please sign in again first.");
+  const cleanName = displayName.trim().slice(0, 40);
+  if (cleanName.length < 2) throw new Error("Use at least two characters.");
+  const { error } = await client
+    .from("profiles")
+    .update({ display_name: cleanName })
+    .eq("id", identity.id);
+  if (error) throw error;
+}
+
+export async function prepareCloudAccountTransfer(listId: string): Promise<string> {
+  const client = requireCloud();
+  const { data, error } = await client.rpc("prepare_account_transfer", {
+    target_list: listId,
+  });
+  if (error) throw error;
+  if (!data) throw new Error("Could not create a safe recovery handoff.");
+  return String(data);
+}
+
+export async function claimCloudAccountTransfer(token: string): Promise<string> {
+  const client = requireCloud();
+  const { data, error } = await client.rpc("claim_account_transfer", {
+    transfer_token: token,
+  });
+  if (error) throw error;
+  if (!data) throw new Error("That recovery handoff expired. Your original session is still safe.");
+  return String(data);
+}
+
 export async function secureCloudAccount(email: string, redirectTo: string) {
   const client = requireCloud();
   const identity = await getCloudIdentity();
@@ -179,6 +294,15 @@ export async function signOutCloudAccount() {
   const client = requireCloud();
   const { error } = await client.auth.signOut();
   if (error) throw error;
+}
+
+export async function deleteCloudAccount() {
+  const client = requireCloud();
+  const { error } = await client.functions.invoke("delete-account", {
+    body: { confirmation: "DELETE" },
+  });
+  if (error) throw error;
+  await client.auth.signOut({ scope: "local" }).catch(() => undefined);
 }
 
 export async function createCloudList(

@@ -40,28 +40,38 @@ import {
   X,
 } from "lucide-react";
 import { activityCatalog, filterOptions, mediaCatalog } from "@/lib/catalog";
+import { classifyAuthIssue, normalizeOtp, resendSeconds } from "@/lib/auth-flow";
 import {
   cloudConfigured,
   createCloudList,
+  deleteCloudAccount,
   enableCloudNotifications,
   ensureCloudUser,
   fetchCloudCatalog,
   getCloudIdentity,
   joinCloudList,
   loadCloudSnapshot,
+  listCloudAccounts,
+  claimCloudAccountTransfer,
+  prepareCloudAccountTransfer,
   restoreCloudAccount,
   restoreCloudList,
   saveCloudCustomActivity,
   saveCloudPairEvent,
   saveCloudVote,
   secureCloudAccount,
+  resendCloudEmailChange,
   sendCloudSignInLink,
   sendCloudSignUpLink,
   signOutCloudAccount,
+  subscribeToCloudAuth,
   subscribeToCloudList,
   notifyCloudPartner,
   updateCloudList,
+  updateCloudDisplayName,
+  verifyCloudOtp,
   type CloudIdentity,
+  type CloudListSummary,
 } from "@/lib/sync";
 import {
   defaultFilters,
@@ -81,6 +91,15 @@ type View = "home" | "discover" | "matches" | "lists";
 type Deck = "watch" | "activities";
 type Item = MediaItem | ActivityItem;
 type PendingSetup = { name: string; listName: string; inviteCode: string };
+type AuthIntent = {
+  mode: "signup" | "signin" | "secure";
+  email: string;
+  sentAt: number;
+  setup?: PendingSetup;
+  listId?: string;
+  listName?: string;
+  transferToken?: string;
+};
 type CollectionSelection =
   | { type: "smart"; kind: ContentKind }
   | { type: "custom"; id: string };
@@ -92,6 +111,7 @@ interface BeforeInstallPromptEvent extends Event {
 
 const STORAGE_KEY = "reeltogether.session.v2";
 const PENDING_SETUP_KEY = "reeltogether.pending-setup.v1";
+const AUTH_INTENT_KEY = "reeltogether.auth-intent.v1";
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ?? "";
 function imageFallback(event: React.SyntheticEvent<HTMLImageElement>) {
@@ -169,6 +189,8 @@ export default function ReelTogetherApp() {
   const [pendingSetup, setPendingSetup] = useState<PendingSetup | null>(null);
   const [isInstalled, setIsInstalled] = useState(false);
   const [identity, setIdentity] = useState<CloudIdentity | null>(null);
+  const [cloudLists, setCloudLists] = useState<CloudListSummary[]>([]);
+  const [authStatus, setAuthStatus] = useState<"ready" | "restoring" | "joining" | "error">("ready");
   const [showTonight, setShowTonight] = useState(false);
   const [showRoulette, setShowRoulette] = useState(false);
   const [planItem, setPlanItem] = useState<Item | null>(null);
@@ -194,6 +216,61 @@ export default function ReelTogetherApp() {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(""), 2200);
   }, []);
+
+  const finishVerifiedAuth = useCallback(async (intent: AuthIntent) => {
+    setAuthStatus(intent.setup?.inviteCode ? "joining" : "restoring");
+    setError("");
+    try {
+      const currentIdentity = await getCloudIdentity();
+      if (!currentIdentity) throw new Error("Verification finished, but no session was returned. Please try signing in once more.");
+      setIdentity(currentIdentity);
+
+      let exactListId = intent.listId;
+      if (intent.transferToken) {
+        exactListId = await claimCloudAccountTransfer(intent.transferToken);
+      }
+
+      let next: SessionSnapshot | null = exactListId
+        ? await restoreCloudList(exactListId)
+        : null;
+      if (!next && intent.setup) {
+        const user = await ensureCloudUser(intent.setup.name);
+        if (intent.setup.inviteCode) {
+          const listId = await joinCloudList(intent.setup.inviteCode);
+          next = await loadCloudSnapshot(user, listId);
+          setShowPairWelcome(true);
+        } else {
+          // A repeated verification can never create duplicate lists: always
+          // restore an existing membership before creating the first one.
+          next = await restoreCloudAccount();
+          if (!next) {
+            const listId = await createCloudList(
+              user,
+              intent.setup.listName || "Our shared list",
+              deviceFilters(),
+            );
+            next = await loadCloudSnapshot(user, listId);
+          }
+        }
+      }
+      if (!next) next = await restoreCloudAccount();
+      if (!next) throw new Error("Your account is ready, but it does not have a shared list yet.");
+
+      setSession(next);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      localStorage.removeItem(PENDING_SETUP_KEY);
+      localStorage.removeItem(AUTH_INTENT_KEY);
+      history.replaceState({}, "", window.location.pathname);
+      setShowAccount(false);
+      setAccountReturn(null);
+      notify(intent.mode === "secure" ? "Account secured — everything stayed together" : "Welcome back");
+      setAuthStatus("ready");
+    } catch (reason) {
+      console.error(reason);
+      setAuthStatus("error");
+      throw reason;
+    }
+  }, [notify]);
 
   const refreshCloud = useCallback(async (current: SessionSnapshot) => {
     if (!cloudConfigured) return;
@@ -242,9 +319,15 @@ export default function ReelTogetherApp() {
         const currentIdentity = await getCloudIdentity();
         setIdentity(currentIdentity);
         if (!currentIdentity) {
-          localStorage.removeItem(STORAGE_KEY);
-          if (securedReturn)
+          if (parsed) {
+            // A temporary auth/network failure must never erase the last local
+            // copy of a guest or secured shared space. Cloud writes will resume
+            // when Supabase restores its persisted session.
+            setSession(parsed);
+            setError("We couldn’t verify syncing just now. Your shared space is still safely visible on this device.");
+          } else if (securedReturn) {
             setAccountReturn({ listId: returnListId, listName: returnListName });
+          }
           return;
         }
         if (securedReturn && returnListId) {
@@ -254,6 +337,7 @@ export default function ReelTogetherApp() {
             setSession(restoredList);
             setAccountReturn(null);
             localStorage.removeItem(PENDING_SETUP_KEY);
+            localStorage.removeItem(AUTH_INTENT_KEY);
             history.replaceState({}, "", window.location.pathname);
             notify("Account secured — your shared list is safe");
           } catch (reason) {
@@ -268,20 +352,24 @@ export default function ReelTogetherApp() {
           setSession(await loadCloudSnapshot(user, listId));
           setShowPairWelcome(true);
           localStorage.removeItem(PENDING_SETUP_KEY);
+          localStorage.removeItem(AUTH_INTENT_KEY);
           history.replaceState({}, "", window.location.pathname);
         } else if (parsed && parsed.user.id === currentIdentity.id) {
           setSession(await loadCloudSnapshot(parsed.user, parsed.list.id));
           localStorage.removeItem(PENDING_SETUP_KEY);
+          localStorage.removeItem(AUTH_INTENT_KEY);
         } else {
           const restored = await restoreCloudAccount();
           if (restored) {
             setSession(restored);
             localStorage.removeItem(PENDING_SETUP_KEY);
+            localStorage.removeItem(AUTH_INTENT_KEY);
           } else if (pending) {
             const user = await ensureCloudUser(pending.name);
             const listId = await createCloudList(user, pending.listName || "Our shared list", deviceFilters());
             setSession(await loadCloudSnapshot(user, listId));
             localStorage.removeItem(PENDING_SETUP_KEY);
+            localStorage.removeItem(AUTH_INTENT_KEY);
             history.replaceState({}, "", window.location.pathname);
           } else {
             setSession(null);
@@ -290,8 +378,10 @@ export default function ReelTogetherApp() {
         }
       } catch (reason) {
         console.error(reason);
-        localStorage.removeItem(STORAGE_KEY);
-        if (pending?.inviteCode) setError(inviteErrorMessage(reason));
+        if (parsed) {
+          setSession(parsed);
+          setError("Syncing is temporarily unavailable. Nothing was removed; we’ll reconnect on your next refresh.");
+        } else if (pending?.inviteCode) setError(inviteErrorMessage(reason));
       } finally {
         setLoading(false);
       }
@@ -343,6 +433,32 @@ export default function ReelTogetherApp() {
     if (!session) return;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
   }, [session]);
+
+  useEffect(() => {
+    if (!cloudConfigured) return;
+    return subscribeToCloudAuth((event, nextIdentity) => {
+      setIdentity(nextIdentity);
+      if (event === "SIGNED_OUT") {
+        localStorage.removeItem(STORAGE_KEY);
+        setCloudLists([]);
+        setSession(null);
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!cloudConfigured || !identity || !session) {
+      if (!identity) setCloudLists([]);
+      return;
+    }
+    let cancelled = false;
+    void listCloudAccounts()
+      .then((lists) => {
+        if (!cancelled) setCloudLists(lists);
+      })
+      .catch((reason) => console.error(reason));
+    return () => { cancelled = true; };
+  }, [identity?.id, session?.list.id]);
 
   useEffect(() => {
     if (!session) return;
@@ -738,6 +854,8 @@ export default function ReelTogetherApp() {
             pendingSetup={pendingSetup}
             activeListId={accountReturn?.listId}
             activeListName={accountReturn?.listName}
+            authStatus={authStatus}
+            onVerified={finishVerifiedAuth}
             onClose={() => setShowAccount(false)}
             onSignedOut={() => undefined}
           />
@@ -828,6 +946,23 @@ export default function ReelTogetherApp() {
             onEnableNotifications={() => void enableNotifications()}
             onOpenCollection={setCollectionSelection}
             onNewCollection={() => setCollectionEditor("new")}
+            availableLists={cloudLists}
+            onSwitchList={(listId) => {
+              if (listId === session.list.id) return;
+              setAuthStatus("restoring");
+              void restoreCloudList(listId)
+                .then((next) => {
+                  if (!next) throw new Error("That shared space could not be opened.");
+                  setSession(next);
+                  setView("home");
+                  notify(`Opened ${next.list.name}`);
+                  setAuthStatus("ready");
+                })
+                .catch((reason) => {
+                  setAuthStatus("error");
+                  setError(reason instanceof Error ? reason.message : "Could not switch lists.");
+                });
+            }}
           />
         )}
       </div>
@@ -890,6 +1025,18 @@ export default function ReelTogetherApp() {
           identity={identity}
           activeListId={session.list.id}
           activeListName={session.list.name}
+          displayName={session.user.displayName}
+          authStatus={authStatus}
+          onVerified={finishVerifiedAuth}
+          onProfileUpdated={(name) => {
+            setSession((current) => current ? {
+              ...current,
+              user: { ...current.user, displayName: name },
+              members: current.members.map((member) =>
+                member.id === current.user.id ? { ...member, displayName: name } : member,
+              ),
+            } : current);
+          }}
           onClose={() => setShowAccount(false)}
           onSignedOut={() => {
             localStorage.removeItem(STORAGE_KEY);
@@ -1111,10 +1258,18 @@ function Onboarding({
         return;
       }
       const user = await ensureCloudUser(name.trim());
-      const listId = inviteCode
-        ? await joinCloudList(inviteCode)
-        : await createCloudList(user, listName.trim() || "Our shared list", deviceFilters());
-      onComplete(await loadCloudSnapshot(user, listId), Boolean(inviteCode));
+      let next: SessionSnapshot | null = null;
+      if (inviteCode) {
+        const listId = await joinCloudList(inviteCode);
+        next = await loadCloudSnapshot(user, listId);
+      } else {
+        next = await restoreCloudAccount();
+        if (!next) {
+          const listId = await createCloudList(user, listName.trim() || "Our shared list", deviceFilters());
+          next = await loadCloudSnapshot(user, listId);
+        }
+      }
+      onComplete(next, Boolean(inviteCode));
       localStorage.removeItem(PENDING_SETUP_KEY);
       history.replaceState({}, "", window.location.pathname);
     } catch (reason) {
@@ -1195,8 +1350,15 @@ function Onboarding({
               ? `Join ${inviteFrom || "your person"}`
               : accountReady
                 ? "Finish setup"
-                : "Create shared list"}
+                : "Continue as guest"}
         </button>
+        {cloudConfigured && !accountReady && (
+          <small className="guest-explainer">
+            {inviteCode
+              ? "Join instantly; add your email later without leaving this list."
+              : "Start instantly on this device, or use email below for recovery across devices."}
+          </small>
+        )}
         {accountReady && (
           <div className="account-ready-note"><ShieldCheck size={16} /> Account created successfully</div>
         )}
@@ -1215,7 +1377,7 @@ function Onboarding({
                 inviteCode,
               });
             }}>
-              <CircleUserRound size={17} /> Create an account
+              <CircleUserRound size={17} /> Use email instead
             </button>
             <button className="account-shortcut" onClick={() => {
               if (inviteCode && name.trim().length < 2) {
@@ -2055,6 +2217,8 @@ function ListsView({
   onEnableNotifications,
   onOpenCollection,
   onNewCollection,
+  availableLists,
+  onSwitchList,
 }: {
   session: SessionSnapshot;
   matches: Item[];
@@ -2069,6 +2233,8 @@ function ListsView({
   onEnableNotifications: () => void;
   onOpenCollection: (selection: CollectionSelection) => void;
   onNewCollection: () => void;
+  availableLists: CloudListSummary[];
+  onSwitchList: (listId: string) => void;
 }) {
   const smartCollections: Array<{
     kind: ContentKind;
@@ -2108,6 +2274,26 @@ function ListsView({
           <button onClick={onAccount}>
             {identity && !identity.isAnonymous ? "Manage" : "Add email"}
           </button>
+        </section>
+      )}
+      {cloud && availableLists.length > 1 && (
+        <section className="space-switcher" aria-label="Your shared spaces">
+          <div className="collection-heading">
+            <div><p>YOUR SPACES</p><h2>Switch shared list</h2></div>
+          </div>
+          <div className="space-switcher-list">
+            {availableLists.map((list) => (
+              <button
+                key={list.id}
+                className={list.id === session.list.id ? "active" : ""}
+                onClick={() => onSwitchList(list.id)}
+              >
+                <span><Users size={17} /></span>
+                <b>{list.name}</b>
+                {list.id === session.list.id ? <Check size={17} /> : <ChevronRight size={17} />}
+              </button>
+            ))}
+          </div>
         </section>
       )}
       <section className="collection-section">
@@ -2692,6 +2878,10 @@ function AccountSheet({
   pendingSetup,
   activeListId,
   activeListName,
+  displayName,
+  authStatus,
+  onVerified,
+  onProfileUpdated,
   onClose,
   onSignedOut,
 }: {
@@ -2700,43 +2890,156 @@ function AccountSheet({
   pendingSetup?: PendingSetup | null;
   activeListId?: string | undefined;
   activeListName?: string | undefined;
+  displayName?: string;
+  authStatus: "ready" | "restoring" | "joining" | "error";
+  onVerified: (intent: AuthIntent) => Promise<void>;
+  onProfileUpdated?: (name: string) => void;
   onClose: () => void;
   onSignedOut: () => void;
 }) {
   const [email, setEmail] = useState(identity?.email ?? "");
+  const [profileName, setProfileName] = useState(displayName ?? "");
   const [busy, setBusy] = useState(false);
-  const [sent, setSent] = useState(false);
+  const [intent, setIntent] = useState<AuthIntent | null>(() => {
+    try {
+      const value = localStorage.getItem(AUTH_INTENT_KEY);
+      return value ? JSON.parse(value) as AuthIntent : null;
+    } catch {
+      return null;
+    }
+  });
+  const [code, setCode] = useState("");
+  const [secondsLeft, setSecondsLeft] = useState(0);
+  const [conflict, setConflict] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [message, setMessage] = useState("");
   const securing = mode === "manage" && Boolean(identity?.isAnonymous);
+
+  useEffect(() => {
+    if (!intent) return;
+    const tick = () => setSecondsLeft(resendSeconds(intent.sentAt));
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [intent?.sentAt]);
+
+  function redirectFor(nextIntent: Pick<AuthIntent, "setup" | "listId" | "listName">) {
+    const redirect = new URL(`${window.location.origin}${window.location.pathname}`);
+    if (nextIntent.setup) redirect.searchParams.set("setup", JSON.stringify(nextIntent.setup));
+    if (nextIntent.listId) {
+      redirect.searchParams.set("secured", "1");
+      redirect.searchParams.set("returnList", nextIntent.listId);
+      redirect.searchParams.set("returnName", nextIntent.listName || "your shared list");
+    }
+    return redirect.toString();
+  }
+
+  function remember(nextIntent: AuthIntent) {
+    setIntent(nextIntent);
+    setEmail(nextIntent.email);
+    localStorage.setItem(AUTH_INTENT_KEY, JSON.stringify(nextIntent));
+    if (nextIntent.setup) localStorage.setItem(PENDING_SETUP_KEY, JSON.stringify(nextIntent.setup));
+  }
 
   async function submit() {
     if (!email.includes("@")) return;
     setBusy(true);
     setMessage("");
+    setConflict(false);
     try {
-      const redirect = new URL(`${window.location.origin}${window.location.pathname}`);
-      let serializedSetup = "";
-      if ((mode === "signup" || mode === "signin") && pendingSetup) {
-        serializedSetup = JSON.stringify(pendingSetup);
-        redirect.searchParams.set("setup", serializedSetup);
-      }
-      if ((securing || mode === "signin") && activeListId) {
-        redirect.searchParams.set("secured", "1");
-        redirect.searchParams.set("returnList", activeListId);
-        redirect.searchParams.set("returnName", activeListName || "your shared list");
-      }
-      const redirectTo = redirect.toString();
+      const nextIntent: AuthIntent = {
+        mode: securing ? "secure" : mode === "signup" ? "signup" : "signin",
+        email: email.trim().toLowerCase(),
+        sentAt: Date.now(),
+        ...(pendingSetup ? { setup: pendingSetup } : {}),
+        ...((securing || mode === "signin") && activeListId ? { listId: activeListId } : {}),
+        ...(activeListName ? { listName: activeListName } : {}),
+      };
+      const redirectTo = redirectFor(nextIntent);
       if (securing) await secureCloudAccount(email, redirectTo);
       else if (mode === "signup") await sendCloudSignUpLink(email, redirectTo);
       else await sendCloudSignInLink(email, redirectTo);
-      if (serializedSetup) localStorage.setItem(PENDING_SETUP_KEY, serializedSetup);
-      setSent(true);
+      remember(nextIntent);
     } catch (reason) {
-      setMessage(
-        reason instanceof Error
-          ? reason.message
-          : "We could not send the email.",
-      );
+      const raw = reason instanceof Error ? reason.message : "We could not send the email.";
+      const issue = classifyAuthIssue(raw);
+      if (securing && issue === "conflict") {
+        setConflict(true);
+        setMessage("That email already has a ReelTogether account. This guest list is still open and unchanged.");
+      } else if (issue === "rate-limit") {
+        setMessage("Supabase has temporarily limited emails. Your session is safe—wait a few minutes, then resend once.");
+      } else setMessage(raw);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function recoverExistingAccount() {
+    if (!activeListId) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const transferToken = await prepareCloudAccountTransfer(activeListId);
+      const nextIntent: AuthIntent = {
+        mode: "signin",
+        email: email.trim().toLowerCase(),
+        sentAt: Date.now(),
+        listId: activeListId,
+        ...(activeListName ? { listName: activeListName } : {}),
+        transferToken,
+      };
+      await sendCloudSignInLink(nextIntent.email, redirectFor(nextIntent));
+      remember(nextIntent);
+      setConflict(false);
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : "Could not prepare the safe account handoff.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function verify() {
+    if (!intent || code.replace(/\D/g, "").length < 6) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await verifyCloudOtp(intent.email, code, intent.mode === "secure" ? "email_change" : "email");
+      await onVerified(intent);
+    } catch (reason) {
+      const raw = reason instanceof Error ? reason.message : "That code could not be verified.";
+      setMessage(classifyAuthIssue(raw) === "expired" ? "That code expired. Resend a fresh one—your list is still safe." : raw);
+      setBusy(false);
+    }
+  }
+
+  async function resend() {
+    if (!intent || secondsLeft > 0) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const redirectTo = redirectFor(intent);
+      if (intent.mode === "secure") await resendCloudEmailChange(intent.email, redirectTo);
+      else if (intent.mode === "signup") await sendCloudSignUpLink(intent.email, redirectTo);
+      else await sendCloudSignInLink(intent.email, redirectTo);
+      remember({ ...intent, sentAt: Date.now() });
+      setMessage("A fresh code is on its way.");
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : "Could not resend the code.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveProfile() {
+    setBusy(true);
+    setMessage("");
+    try {
+      await updateCloudDisplayName(profileName);
+      const cleanName = profileName.trim().slice(0, 40);
+      onProfileUpdated?.(cleanName);
+      setMessage("Name updated for both of you.");
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : "Could not update your name.");
     } finally {
       setBusy(false);
     }
@@ -2755,6 +3058,20 @@ function AccountSheet({
     }
   }
 
+  async function deleteAccount() {
+    setBusy(true);
+    setMessage("");
+    try {
+      await deleteCloudAccount();
+      localStorage.removeItem(AUTH_INTENT_KEY);
+      localStorage.removeItem(PENDING_SETUP_KEY);
+      onSignedOut();
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : "Could not delete the account.");
+      setBusy(false);
+    }
+  }
+
   const permanent =
     mode === "manage" && Boolean(identity && !identity.isAnonymous);
   return (
@@ -2766,20 +3083,43 @@ function AccountSheet({
         <button className="sheet-close" onClick={onClose} aria-label="Close">
           <X size={20} />
         </button>
-        {sent ? (
+        {intent ? (
           <div className="email-sent">
             <span>
               <Mail size={27} />
             </span>
             <p>CHECK YOUR EMAIL</p>
-            <h2>One tap and you’re set.</h2>
+            <h2>Enter your 6-digit code.</h2>
             <small>
-              We sent a secure link to <strong>{email}</strong>. Open it on this
-              device to finish.
+              Sent to <strong>{intent.email}</strong>. Verifying here keeps you on the same device and restores the exact shared space.
             </small>
-            <button className="primary-button" onClick={onClose}>
-              Done
+            <label>
+              Verification code
+              <input
+                className="otp-input"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                maxLength={6}
+                value={code}
+                onChange={(event) => setCode(normalizeOtp(event.target.value))}
+                placeholder="000000"
+                autoFocus
+              />
+            </label>
+            <button className="primary-button" disabled={busy || code.length !== 6} onClick={verify}>
+              {busy || authStatus === "restoring" || authStatus === "joining" ? "Restoring your space…" : "Verify and continue"}
             </button>
+            <button className="text-button" disabled={busy || secondsLeft > 0} onClick={resend}>
+              {secondsLeft > 0 ? `Resend in ${secondsLeft}s` : "Resend code"}
+            </button>
+            <button className="text-button" disabled={busy} onClick={() => {
+              localStorage.removeItem(AUTH_INTENT_KEY);
+              setIntent(null);
+              setCode("");
+              setMessage("");
+            }}>Use a different email</button>
+            <small className="magic-link-fallback">Your older secure email link still works too.</small>
+            {message && <div className="form-message">{message}</div>}
           </div>
         ) : permanent ? (
           <div className="account-manage">
@@ -2792,6 +3132,13 @@ function AccountSheet({
               Your lists and votes can be restored with{" "}
               <strong>{identity?.email}</strong>.
             </small>
+            <label>
+              Your display name
+              <input value={profileName} onChange={(event) => setProfileName(event.target.value)} maxLength={40} />
+            </label>
+            <button className="outline-button" disabled={busy || profileName.trim().length < 2 || profileName.trim() === displayName} onClick={saveProfile}>
+              Save name
+            </button>
             <button
               className="outline-button sign-out"
               disabled={busy}
@@ -2799,6 +3146,16 @@ function AccountSheet({
             >
               <LogOut size={16} /> Sign out
             </button>
+            <small className="account-safety-note">Signing out only removes this device session. It never deletes your shared lists.</small>
+            {confirmDelete ? (
+              <div className="delete-account-confirm">
+                <b>Delete this account permanently?</b>
+                <small>Your partner keeps shared two-person lists. Your own votes and profile are removed.</small>
+                <div><button className="text-button" disabled={busy} onClick={() => setConfirmDelete(false)}>Cancel</button><button className="text-button danger" disabled={busy} onClick={deleteAccount}>{busy ? "Deleting…" : "Yes, delete"}</button></div>
+              </div>
+            ) : (
+              <button className="text-button danger delete-account-trigger" disabled={busy} onClick={() => setConfirmDelete(true)}><Trash2 size={14} /> Delete account</button>
+            )}
             {message && <div className="form-message">{message}</div>}
           </div>
         ) : (
@@ -2841,6 +3198,13 @@ function AccountSheet({
                     ? "Create my account"
                     : "Email me a sign-in link"}
             </button>
+            {conflict && (
+              <div className="account-conflict">
+                <ShieldCheck size={18} />
+                <div><b>Keep this list and sign in</b><small>We’ll make a one-time recovery handoff, then merge this guest membership into your existing account after verification.</small></div>
+                <button className="outline-button" disabled={busy} onClick={recoverExistingAccount}>Continue safely</button>
+              </div>
+            )}
             {message && <div className="form-message">{message}</div>}
           </div>
         )}

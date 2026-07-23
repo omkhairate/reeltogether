@@ -20,8 +20,11 @@ export type MediaItem = {
   genres: string[];
   language: string;
   providers: string[];
+  providerLogos?: Record<string, string>;
+  watchLink?: string;
   image: string;
   summary: string;
+  tmdbId?: number;
 };
 
 export type ActivityItem = {
@@ -36,6 +39,7 @@ export type ActivityItem = {
   vibes: string[];
   image: string;
   summary: string;
+  custom?: boolean;
 };
 
 export type DiscoveryFilters = {
@@ -46,6 +50,8 @@ export type DiscoveryFilters = {
   activityCategories: string[];
   budgets: string[];
   maxDistanceKm: number;
+  region: string;
+  hideCompleted: boolean;
 };
 
 export type SharedList = {
@@ -81,6 +87,7 @@ export type SessionSnapshot = {
   members: Member[];
   votes: Vote[];
   events: PairEvent[];
+  savedItems: Array<MediaItem | ActivityItem>;
 };
 
 export const defaultFilters: DiscoveryFilters = {
@@ -91,4 +98,6 @@ export const defaultFilters: DiscoveryFilters = {
   activityCategories: [],
   budgets: [],
   maxDistanceKm: 25,
+  region: "IN",
+  hideCompleted: true,
 };

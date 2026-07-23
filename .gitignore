@@ -13,6 +13,7 @@ xcuserdata
 coverage
 playwright-report
 test-results
+**/supabase/.temp/
 .logs/
 .prompts/
 legacy/

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bookmark,
   BarChart3,
+  Bell,
   CalendarDays,
   Check,
   CheckCircle2,
@@ -14,7 +15,9 @@ import {
   Download,
   Dices,
   Euro,
+  EyeOff,
   Film,
+  Globe2,
   House,
   Info,
   ListFilter,
@@ -39,17 +42,22 @@ import { activityCatalog, filterOptions, mediaCatalog } from "@/lib/catalog";
 import {
   cloudConfigured,
   createCloudList,
+  enableCloudNotifications,
   ensureCloudUser,
+  fetchCloudCatalog,
   getCloudIdentity,
   joinCloudList,
   loadCloudSnapshot,
   restoreCloudAccount,
+  saveCloudCustomActivity,
   saveCloudPairEvent,
   saveCloudVote,
   secureCloudAccount,
   sendCloudSignInLink,
+  sendCloudSignUpLink,
   signOutCloudAccount,
   subscribeToCloudList,
+  notifyCloudPartner,
   updateCloudList,
   type CloudIdentity,
 } from "@/lib/sync";
@@ -77,6 +85,12 @@ interface BeforeInstallPromptEvent extends Event {
 
 const STORAGE_KEY = "reeltogether.session.v2";
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ?? "";
+function imageFallback(event: React.SyntheticEvent<HTMLImageElement>) {
+  const image = event.currentTarget;
+  image.onerror = null;
+  image.src = `${basePath}/poster-placeholder.svg`;
+}
 
 function createLocalSession(
   displayName: string,
@@ -105,6 +119,7 @@ function createLocalSession(
       },
     ],
     events: [],
+    savedItems: [],
   };
 }
 
@@ -121,6 +136,7 @@ export default function ReelTogetherApp() {
     useState<BeforeInstallPromptEvent | null>(null);
   const [showInstallHelp, setShowInstallHelp] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
+  const [accountMode, setAccountMode] = useState<"signup" | "signin" | "manage">("signin");
   const [isInstalled, setIsInstalled] = useState(false);
   const [identity, setIdentity] = useState<CloudIdentity | null>(null);
   const [showTonight, setShowTonight] = useState(false);
@@ -128,6 +144,13 @@ export default function ReelTogetherApp() {
   const [planItem, setPlanItem] = useState<Item | null>(null);
   const [rateItem, setRateItem] = useState<Item | null>(null);
   const [celebration, setCelebration] = useState<Item | null>(null);
+  const [remoteMedia, setRemoteMedia] = useState<MediaItem[]>([]);
+  const [catalogPage, setCatalogPage] = useState(1);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogHasMore, setCatalogHasMore] = useState(true);
+  const [catalogNotice, setCatalogNotice] = useState("");
+  const [showAddActivity, setShowAddActivity] = useState(false);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
@@ -155,6 +178,7 @@ export default function ReelTogetherApp() {
         try {
           parsed = JSON.parse(saved) as SessionSnapshot;
           if (!parsed.events) parsed.events = [];
+          if (!parsed.savedItems) parsed.savedItems = [];
         } catch {
           localStorage.removeItem(STORAGE_KEY);
         }
@@ -188,6 +212,46 @@ export default function ReelTogetherApp() {
     void restore();
   }, []);
 
+  const catalogQuery = JSON.stringify(session?.list.filters ?? defaultFilters);
+  useEffect(() => {
+    if (!session || !cloudConfigured) return;
+    let cancelled = false;
+    setCatalogLoading(true);
+    setCatalogNotice("");
+    void fetchCloudCatalog({ page: 1, filters: session.list.filters })
+      .then(({ items, hasMore }) => {
+        if (cancelled) return;
+        setRemoteMedia(items);
+        setCatalogPage(1);
+        setCatalogHasMore(hasMore);
+      })
+      .catch((reason) => {
+        if (cancelled) return;
+        console.error(reason);
+        setCatalogNotice("Live catalogue needs its TMDB connection. Showing starter picks for now.");
+      })
+      .finally(() => {
+        if (!cancelled) setCatalogLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [session?.list.id, catalogQuery]);
+
+  async function loadMoreCatalog() {
+    if (!session || catalogLoading || !catalogHasMore) return;
+    setCatalogLoading(true);
+    try {
+      const nextPage = catalogPage + 1;
+      const result = await fetchCloudCatalog({ page: nextPage, filters: session.list.filters });
+      setRemoteMedia((current) => dedupeItems([...current, ...result.items]));
+      setCatalogPage(nextPage);
+      setCatalogHasMore(result.hasMore);
+    } catch (reason) {
+      setCatalogNotice(reason instanceof Error ? reason.message : "Could not load more titles.");
+    } finally {
+      setCatalogLoading(false);
+    }
+  }
+
   useEffect(() => {
     if (!session) return;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
@@ -209,6 +273,7 @@ export default function ReelTogetherApp() {
       window.matchMedia("(display-mode: standalone)").matches ||
       Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
     setIsInstalled(standalone);
+    setNotificationsEnabled(typeof Notification !== "undefined" && Notification.permission === "granted");
     const capturePrompt = (event: Event) => {
       event.preventDefault();
       setInstallPrompt(event as BeforeInstallPromptEvent);
@@ -240,6 +305,33 @@ export default function ReelTogetherApp() {
     setShowInstallHelp(true);
   }
 
+  async function enableNotifications() {
+    if (!session) return;
+    if (!vapidPublicKey) {
+      setError("Notifications need their final server key before they can be enabled.");
+      return;
+    }
+    try {
+      await enableCloudNotifications(session.list.id, vapidPublicKey);
+      setNotificationsEnabled(true);
+      notify("Partner notifications are on");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not enable notifications.");
+    }
+  }
+
+  async function addCustomActivity(item: ActivityItem) {
+    if (!session) return;
+    try {
+      if (cloudConfigured) await saveCloudCustomActivity(session.list.id, session.user.id, item);
+      setSession((current) => current ? { ...current, savedItems: dedupeItems([...current.savedItems, item]) } : current);
+      setShowAddActivity(false);
+      notify("Activity added for both of you");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not add the activity.");
+    }
+  }
+
   const userVotes = useMemo(
     () =>
       new Map(
@@ -250,10 +342,34 @@ export default function ReelTogetherApp() {
     [session],
   );
 
+  const mediaItems = useMemo(
+    () => dedupeItems([
+      ...remoteMedia,
+      ...mediaCatalog,
+      ...(session?.savedItems.filter((item): item is MediaItem => item.kind !== "activity") ?? []),
+    ]),
+    [remoteMedia, session?.savedItems],
+  );
+  const activityItems = useMemo(
+    () => dedupeItems([
+      ...activityCatalog,
+      ...(session?.savedItems.filter((item): item is ActivityItem => item.kind === "activity") ?? []),
+    ]),
+    [session?.savedItems],
+  );
+  const allItems: Item[] = useMemo(
+    () => [...mediaItems, ...activityItems],
+    [mediaItems, activityItems],
+  );
+  const completedKeys = useMemo(
+    () => new Set(session?.events.filter((event) => event.type === "complete").map((event) => `${event.kind}:${event.itemId}`) ?? []),
+    [session?.events],
+  );
+
   const filteredMedia = useMemo(() => {
     if (!session) return [];
     const filters = session.list.filters;
-    return mediaCatalog.filter(
+    return mediaItems.filter(
       (item) =>
         (!filters.genres.length ||
           filters.genres.some((genre) => item.genres.includes(genre))) &&
@@ -265,29 +381,33 @@ export default function ReelTogetherApp() {
           )) &&
         (!filters.mediaKinds.length || filters.mediaKinds.includes(item.kind)),
     );
-  }, [session]);
+  }, [session, mediaItems]);
 
   const filteredActivities = useMemo(() => {
     if (!session) return [];
     const filters = session.list.filters;
-    return activityCatalog.filter(
+    return activityItems.filter(
       (item) =>
         (!filters.activityCategories.length ||
           filters.activityCategories.includes(item.category)) &&
         (!filters.budgets.length || filters.budgets.includes(item.budget)) &&
         item.distanceKm <= filters.maxDistanceKm,
     );
-  }, [session]);
+  }, [session, activityItems]);
 
   const mediaQueue = filteredMedia.filter(
-    (item) => !userVotes.has(`${item.kind}:${item.id}`),
+    (item) => !userVotes.has(`${item.kind}:${item.id}`) && (!session?.list.filters.hideCompleted || !completedKeys.has(`${item.kind}:${item.id}`)),
   );
   const activityQueue = filteredActivities.filter(
-    (item) => !userVotes.has(`activity:${item.id}`),
+    (item) => !userVotes.has(`activity:${item.id}`) && (!session?.list.filters.hideCompleted || !completedKeys.has(`activity:${item.id}`)),
   );
+  useEffect(() => {
+    if (view === "discover" && deck === "watch" && mediaQueue.length < 5 && catalogHasMore && !catalogLoading)
+      void loadMoreCatalog();
+  }, [view, deck, mediaQueue.length, catalogHasMore, catalogLoading]);
   const matches = useMemo(() => {
     if (!session) return [] as Item[];
-    return [...mediaCatalog, ...activityCatalog].filter((item) => {
+    return allItems.filter((item) => {
       const picks = new Set(
         session.votes
           .filter(
@@ -306,7 +426,7 @@ export default function ReelTogetherApp() {
       );
       return picks.size >= 2 || wildcard;
     });
-  }, [session]);
+  }, [session, allItems]);
 
   async function castVote(item: Item, decision: VoteDecision) {
     if (!session) return;
@@ -351,10 +471,11 @@ export default function ReelTogetherApp() {
     }
     if (cloudConfigured) {
       try {
-        await saveCloudVote(session.list.id, vote);
+        await saveCloudVote(session.list.id, vote, item);
+        if (decision === "pick") void notifyCloudPartner({ listId: session.list.id, type: "vote", itemTitle: item.title });
         const latest = await loadCloudSnapshot(session.user, session.list.id);
         setSession(latest);
-        const nowMatched = [...mediaCatalog, ...activityCatalog].filter(
+        const nowMatched = allItems.filter(
           (candidate) =>
             new Set(
               latest.votes
@@ -427,6 +548,7 @@ export default function ReelTogetherApp() {
     if (cloudConfigured) {
       try {
         await saveCloudPairEvent(session.list.id, event);
+        void notifyCloudPartner({ listId: session.list.id, type, ...(item ? { itemTitle: item.title } : {}) });
         await refreshCloud(session);
       } catch (reason) {
         setError(
@@ -489,7 +611,8 @@ export default function ReelTogetherApp() {
           }}
           onError={setError}
           onInstall={installApp}
-          onSignIn={() => setShowAccount(true)}
+          onSignIn={() => { setAccountMode("signin"); setShowAccount(true); }}
+          onCreateAccount={() => { setAccountMode("signup"); setShowAccount(true); }}
           isInstalled={isInstalled}
         />
         {showInstallHelp && (
@@ -497,7 +620,7 @@ export default function ReelTogetherApp() {
         )}
         {showAccount && (
           <AccountSheet
-            mode="signin"
+            mode={accountMode}
             identity={identity}
             onClose={() => setShowAccount(false)}
             onSignedOut={() => undefined}
@@ -522,6 +645,8 @@ export default function ReelTogetherApp() {
           <HomeView
             session={session}
             matches={matches}
+            catalog={allItems}
+            total={allItems.length}
             remaining={counts.watch + counts.activities}
             onNavigate={setView}
             onShare={shareInvite}
@@ -543,6 +668,11 @@ export default function ReelTogetherApp() {
             onVote={castVote}
             onFilters={() => setShowFilters(true)}
             onDetail={setDetail}
+            onLoadMore={() => void loadMoreCatalog()}
+            loadingMore={catalogLoading}
+            hasMore={catalogHasMore}
+            catalogNotice={catalogNotice}
+            onAddActivity={() => setShowAddActivity(true)}
           />
         )}
         {view === "matches" && (
@@ -555,6 +685,7 @@ export default function ReelTogetherApp() {
             onRate={setRateItem}
             onEvent={addPairEvent}
             onVote={castVote}
+            catalog={allItems}
           />
         )}
         {view === "lists" && (
@@ -563,7 +694,7 @@ export default function ReelTogetherApp() {
             identity={identity}
             cloud={cloudConfigured}
             onShare={shareInvite}
-            onAccount={() => setShowAccount(true)}
+            onAccount={() => { setAccountMode("manage"); setShowAccount(true); }}
             onInstall={installApp}
             isInstalled={isInstalled}
             onReset={() => {
@@ -576,6 +707,8 @@ export default function ReelTogetherApp() {
                 setSession(null);
               });
             }}
+            notificationsEnabled={notificationsEnabled}
+            onEnableNotifications={() => void enableNotifications()}
           />
         )}
       </div>
@@ -584,6 +717,8 @@ export default function ReelTogetherApp() {
         <FiltersSheet
           filters={session.list.filters}
           deck={deck}
+          mediaItems={mediaItems}
+          activityItems={activityItems}
           onClose={() => setShowFilters(false)}
           onSave={(filters) => {
             void changeList({ ...session.list, filters });
@@ -614,7 +749,7 @@ export default function ReelTogetherApp() {
       )}
       {showAccount && (
         <AccountSheet
-          mode="manage"
+          mode={accountMode}
           identity={identity}
           onClose={() => setShowAccount(false)}
           onSignedOut={() => {
@@ -680,6 +815,12 @@ export default function ReelTogetherApp() {
           onClose={() => setCelebration(null)}
         />
       )}
+      {showAddActivity && (
+        <AddActivitySheet
+          onSave={(item) => void addCustomActivity(item)}
+          onClose={() => setShowAddActivity(false)}
+        />
+      )}
       {toast && (
         <div className="toast" role="status">
           {toast}
@@ -712,12 +853,14 @@ function Onboarding({
   onError,
   onInstall,
   onSignIn,
+  onCreateAccount,
   isInstalled,
 }: {
   onComplete: (session: SessionSnapshot) => void;
   onError: (message: string) => void;
   onInstall: () => void;
   onSignIn: () => void;
+  onCreateAccount: () => void;
   isInstalled: boolean;
 }) {
   const [name, setName] = useState("");
@@ -802,9 +945,14 @@ function Onboarding({
               : "Create shared list"}
         </button>
         {cloudConfigured && (
-          <button className="account-shortcut" onClick={onSignIn}>
-            <Mail size={16} /> Already have an account? <strong>Sign in</strong>
-          </button>
+          <div className="account-choices">
+            <button className="account-create" onClick={onCreateAccount}>
+              <CircleUserRound size={17} /> Create an account
+            </button>
+            <button className="account-shortcut" onClick={onSignIn}>
+              Already have one? <strong>Sign in</strong>
+            </button>
+          </div>
         )}
         {!isInstalled && (
           <button className="install-shortcut" onClick={onInstall}>
@@ -825,6 +973,8 @@ function Onboarding({
 function HomeView({
   session,
   matches,
+  catalog,
+  total,
   remaining,
   onNavigate,
   onShare,
@@ -837,6 +987,8 @@ function HomeView({
 }: {
   session: SessionSnapshot;
   matches: Item[];
+  catalog: Item[];
+  total: number;
   remaining: number;
   onNavigate: (view: View) => void;
   onShare: () => void;
@@ -848,8 +1000,8 @@ function HomeView({
   cloud: boolean;
 }) {
   const progress = Math.round(
-    ((mediaCatalog.length + activityCatalog.length - remaining) /
-      (mediaCatalog.length + activityCatalog.length)) *
+    ((total - remaining) /
+      Math.max(1, total)) *
       100,
   );
   const partner = session.members.find(
@@ -874,6 +1026,7 @@ function HomeView({
     : undefined;
   const completed = uniqueItemsForEvents(
     session.events.filter((event) => event.type === "complete"),
+    catalog,
   );
   const mediaMatches = matches.filter(
     (item): item is MediaItem => item.kind !== "activity",
@@ -1003,7 +1156,7 @@ function HomeView({
               className="mini-card"
               onClick={() => onDetail(item)}
             >
-              <img src={item.image} alt="" />
+              <img src={item.image} alt="" onError={imageFallback} />
               <strong>{item.title}</strong>
               <span>
                 <CheckCircle2 size={12} /> Matched
@@ -1054,6 +1207,11 @@ function DiscoverView({
   onVote,
   onFilters,
   onDetail,
+  onLoadMore,
+  loadingMore,
+  hasMore,
+  catalogNotice,
+  onAddActivity,
 }: {
   session: SessionSnapshot;
   deck: Deck;
@@ -1063,6 +1221,11 @@ function DiscoverView({
   onVote: (item: Item, decision: VoteDecision) => void;
   onFilters: () => void;
   onDetail: (item: Item) => void;
+  onLoadMore: () => void;
+  loadingMore: boolean;
+  hasMore: boolean;
+  catalogNotice: string;
+  onAddActivity: () => void;
 }) {
   const canSwitch = session.list.contentMode === "mixed";
   const effectiveDeck =
@@ -1098,10 +1261,15 @@ function DiscoverView({
             <Users size={13} /> A match stays secret until you both pick it
           </p>
         </div>
-        <button onClick={onFilters} aria-label="Shared filters">
-          <ListFilter size={20} />
-          <i>{activeFilterCount(session.list.filters)}</i>
-        </button>
+        <div className="discover-actions">
+          {effectiveDeck === "activities" && (
+            <button onClick={onAddActivity} aria-label="Add an activity"><Plus size={20} /></button>
+          )}
+          <button onClick={onFilters} aria-label="Shared filters">
+            <ListFilter size={20} />
+            <i>{activeFilterCount(session.list.filters)}</i>
+          </button>
+        </div>
       </header>
       {item ? (
         <SwipeDeck
@@ -1122,6 +1290,12 @@ function DiscoverView({
         {queue.length} {effectiveDeck === "watch" ? "titles" : "activities"}{" "}
         left for you
       </p>
+      {catalogNotice && effectiveDeck === "watch" && <p className="catalog-notice">{catalogNotice}</p>}
+      {effectiveDeck === "watch" && hasMore && (
+        <button className="load-more" disabled={loadingMore} onClick={onLoadMore}>
+          {loadingMore ? "Finding more…" : "Load more from TMDB"}
+        </button>
+      )}
     </div>
   );
 }
@@ -1160,7 +1334,7 @@ function SwipeDeck({
           onPointerUp={endDrag}
           onPointerCancel={() => setDrag(0)}
         >
-          <img src={item.image} alt={`${item.title}`} draggable={false} />
+          <img src={item.image} alt={`${item.title}`} draggable={false} onError={imageFallback} />
           <div className="poster-shade" />
           <span className="kind-pill">
             {item.kind === "activity"
@@ -1224,8 +1398,14 @@ function MediaCopy({ item }: { item: MediaItem }) {
       <p>
         {item.year} · {item.runtime} · {item.genres.join(" · ")}
       </p>
-      <span className="provider">
-        <MonitorPlay size={14} /> {item.providers.join(" · ")}
+      <span className="provider provider-badges">
+        <MonitorPlay size={14} />
+        {item.providers.length ? item.providers.slice(0, 3).map((provider) => (
+          <span key={provider}>
+            {item.providerLogos?.[provider] && <img src={item.providerLogos[provider]} alt="" />}
+            {provider}
+          </span>
+        )) : <span>Availability varies by region</span>}
       </span>
       <small>{item.summary}</small>
     </>
@@ -1269,6 +1449,7 @@ function MatchesView({
   onRate,
   onEvent,
   onVote,
+  catalog,
 }: {
   matches: Item[];
   session: SessionSnapshot;
@@ -1282,6 +1463,7 @@ function MatchesView({
     payload?: PairEvent["payload"],
   ) => void;
   onVote: (item: Item, decision: VoteDecision) => void;
+  catalog: Item[];
 }) {
   const [area, setArea] = useState<Deck>("watch");
   const visible = matches.filter((item) =>
@@ -1290,7 +1472,6 @@ function MatchesView({
   const partner = session.members.find(
     (member) => member.id !== session.user.id,
   );
-  const catalog: Item[] = [...mediaCatalog, ...activityCatalog];
   const almost = partner
     ? catalog.filter(
         (item) =>
@@ -1310,7 +1491,7 @@ function MatchesView({
           ),
       )
     : [];
-  const incomingNudges = session.events.filter((event) => event.type === "nudge" && event.userId !== session.user.id).map((event) => ({ event, item: findItem(event.itemId, event.kind) })).filter((entry): entry is { event: PairEvent; item: Item } => Boolean(entry.item) && session.votes.some((vote) => vote.userId === session.user.id && vote.itemId === entry.item?.id && vote.kind === entry.item?.kind && vote.decision === "pass"));
+  const incomingNudges = session.events.filter((event) => event.type === "nudge" && event.userId !== session.user.id).map((event) => ({ event, item: findItem(event.itemId, event.kind, catalog) })).filter((entry): entry is { event: PairEvent; item: Item } => Boolean(entry.item) && session.votes.some((vote) => vote.userId === session.user.id && vote.itemId === entry.item?.id && vote.kind === entry.item?.kind && vote.decision === "pass"));
   const wildcardUsed = session.events.some(
     (event) => event.type === "wildcard" && event.userId === session.user.id,
   );
@@ -1319,6 +1500,7 @@ function MatchesView({
   );
   const completedItems = uniqueItemsForEvents(
     session.events.filter((event) => event.type === "complete"),
+    catalog,
   );
   const watchMatch = matches.find((item) => item.kind !== "activity");
   const activityMatch = matches.find((item) => item.kind === "activity");
@@ -1354,7 +1536,7 @@ function MatchesView({
               key={`${item.kind}-${item.id}`}
               onClick={() => onDetail(item)}
             >
-              <img src={item.image} alt="" />
+              <img src={item.image} alt="" onError={imageFallback} />
               <div>
                 <span>
                   {session.events.some(
@@ -1396,7 +1578,7 @@ function MatchesView({
           <button onClick={() => onPlan(watchMatch)}>Plan this pairing</button>
         </section>
       )}
-      {incomingNudges.length > 0 && <><SectionHeading eyebrow={`${partner?.displayName?.toUpperCase()} SAYS`} title="Give it one more look?" action="" onAction={() => undefined} /><div className="incoming-nudges">{incomingNudges.map(({ event, item }) => <div key={event.id}><img src={item.image} alt="" /><div><b>{item.title}</b><small>“{String(event.payload.message)}”</small></div><button onClick={() => onVote(item, "pick")}><RotateCcw size={13} /> Reconsider</button></div>)}</div></>}
+      {incomingNudges.length > 0 && <><SectionHeading eyebrow={`${partner?.displayName?.toUpperCase()} SAYS`} title="Give it one more look?" action="" onAction={() => undefined} /><div className="incoming-nudges">{incomingNudges.map(({ event, item }) => <div key={event.id}><img src={item.image} alt="" onError={imageFallback} /><div><b>{item.title}</b><small>“{String(event.payload.message)}”</small></div><button onClick={() => onVote(item, "pick")}><RotateCcw size={13} /> Reconsider</button></div>)}</div></>}
       {plans.length > 0 && (
         <>
           <SectionHeading
@@ -1407,7 +1589,7 @@ function MatchesView({
           />
           <div className="plan-list">
             {plans.map((event) => {
-              const item = findItem(event.itemId, event.kind);
+              const item = findItem(event.itemId, event.kind, catalog);
               if (!item) return null;
               const confirmed = session.events.some(
                 (entry) =>
@@ -1417,7 +1599,7 @@ function MatchesView({
               );
               return (
                 <div key={event.id}>
-                  <img src={item.image} alt="" />
+                  <img src={item.image} alt="" onError={imageFallback} />
                   <div>
                     <b>{item.title}</b>
                     <small>
@@ -1463,7 +1645,7 @@ function MatchesView({
               );
               return (
                 <div key={`${item.kind}-${item.id}`}>
-                  <img src={item.image} alt="" />
+                  <img src={item.image} alt="" onError={imageFallback} />
                   <div>
                     <b>{item.title}</b>
                     <small>
@@ -1516,7 +1698,7 @@ function MatchesView({
                   key={`${item.kind}-${item.id}`}
                   onClick={() => onDetail(item)}
                 >
-                  <img src={item.image} alt="" />
+                  <img src={item.image} alt="" onError={imageFallback} />
                   <b>{item.title}</b>
                   <small>
                     {ratings.length >= 2
@@ -1542,6 +1724,8 @@ function ListsView({
   onInstall,
   isInstalled,
   onReset,
+  notificationsEnabled,
+  onEnableNotifications,
 }: {
   session: SessionSnapshot;
   identity: CloudIdentity | null;
@@ -1551,6 +1735,8 @@ function ListsView({
   onInstall: () => void;
   isInstalled: boolean;
   onReset: () => void;
+  notificationsEnabled: boolean;
+  onEnableNotifications: () => void;
 }) {
   return (
     <div className="page lists-page">
@@ -1659,6 +1845,23 @@ function ListsView({
           </button>
         </section>
       )}
+      <section className="settings-card notification-card">
+        <div className="setting-heading">
+          <span><Bell size={20} /></span>
+          <div>
+            <h2>Partner notifications</h2>
+            <p>Get a quiet heads-up for turns, plans, and shared moments.</p>
+          </div>
+        </div>
+        <button className="outline-button" disabled={notificationsEnabled} onClick={onEnableNotifications}>
+          <Bell size={16} /> {notificationsEnabled ? "Notifications on" : "Enable notifications"}
+        </button>
+      </section>
+      <div className="data-credit">
+        <img src={`${basePath}/tmdb-logo.svg`} alt="TMDB" />
+        <span>This product uses the TMDB API but is not endorsed or certified by TMDB.</span>
+        <small>Streaming availability provided by JustWatch.</small>
+      </div>
       <button className="text-button danger" onClick={onReset}>
         Leave this device session
       </button>
@@ -1808,7 +2011,7 @@ function RouletteSheet({
           <div
             className={spinning ? "roulette-pick spinning" : "roulette-pick"}
           >
-            <img src={chosen.image} alt="" />
+            <img src={chosen.image} alt="" onError={imageFallback} />
             <span>{chosen.kind === "activity" ? "DO" : "WATCH"}</span>
             <strong>{chosen.title}</strong>
           </div>
@@ -1851,7 +2054,7 @@ function PlanSheet({
         <button className="sheet-close" onClick={onClose} aria-label="Close planner">
           <X size={20} />
         </button>
-        <img src={item.image} alt="" />
+        <img src={item.image} alt="" onError={imageFallback} />
         <p>MAKE IT REAL</p>
         <h2>When should you do {item.title}?</h2>
         <label>
@@ -1962,7 +2165,7 @@ function MatchCelebration({
         </div>
         <p>YOU BOTH PICKED IT</p>
         <h1>It’s a match.</h1>
-        <div className="celebration-poster"><span>{item.kind === "activity" ? <Compass size={42} /> : <Film size={42} />}</span><img src={item.image} alt="" onError={(event) => { event.currentTarget.style.display = "none"; }} /></div>
+        <div className="celebration-poster"><span>{item.kind === "activity" ? <Compass size={42} /> : <Film size={42} />}</span><img src={item.image} alt="" onError={imageFallback} /></div>
         <h2>{item.title}</h2>
         <button className="primary-button" onClick={onPlan}>
           <CalendarDays size={17} /> Plan it together
@@ -1981,7 +2184,7 @@ function AccountSheet({
   onClose,
   onSignedOut,
 }: {
-  mode: "signin" | "manage";
+  mode: "signup" | "signin" | "manage";
   identity: CloudIdentity | null;
   onClose: () => void;
   onSignedOut: () => void;
@@ -1999,6 +2202,7 @@ function AccountSheet({
     try {
       const redirectTo = `${window.location.origin}${window.location.pathname}`;
       if (securing) await secureCloudAccount(email, redirectTo);
+      else if (mode === "signup") await sendCloudSignUpLink(email, redirectTo);
       else await sendCloudSignInLink(email, redirectTo);
       setSent(true);
     } catch (reason) {
@@ -2076,14 +2280,16 @@ function AccountSheet({
             <span>
               <Mail size={27} />
             </span>
-            <p>{securing ? "SAVE YOUR PROGRESS" : "WELCOME BACK"}</p>
+            <p>{securing ? "SAVE YOUR PROGRESS" : mode === "signup" ? "CREATE YOUR ACCOUNT" : "WELCOME BACK"}</p>
             <h2>
-              {securing ? "Secure your account." : "Sign in to ReelTogether."}
+              {securing ? "Secure your account." : mode === "signup" ? "Start with your email." : "Sign in to ReelTogether."}
             </h2>
             <small>
               {securing
                 ? "Link an email without losing this list or any of your votes."
-                : "We’ll email you a secure sign-in link—no password needed."}
+                : mode === "signup"
+                  ? "We’ll create your account with a secure email link—no password needed."
+                  : "We’ll email you a secure sign-in link—no password needed."}
             </small>
             <label>
               Email address
@@ -2105,11 +2311,65 @@ function AccountSheet({
                 ? "Sending…"
                 : securing
                   ? "Secure my account"
-                  : "Email me a sign-in link"}
+                  : mode === "signup"
+                    ? "Create my account"
+                    : "Email me a sign-in link"}
             </button>
             {message && <div className="form-message">{message}</div>}
           </div>
         )}
+      </section>
+    </div>
+  );
+}
+
+function AddActivitySheet({
+  onSave,
+  onClose,
+}: {
+  onSave: (item: ActivityItem) => void;
+  onClose: () => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [summary, setSummary] = useState("");
+  const [category, setCategory] = useState("Something ours");
+  const [budget, setBudget] = useState<ActivityItem["budget"]>("€");
+  const [duration, setDuration] = useState("2h");
+  const [location, setLocation] = useState("To decide together");
+  function submit() {
+    if (title.trim().length < 2) return;
+    const image = activityCatalog[Math.abs(title.length) % activityCatalog.length]?.image ?? "";
+    onSave({
+      id: `custom-${crypto.randomUUID()}`,
+      kind: "activity",
+      title: title.trim().slice(0, 70),
+      category: category.trim().slice(0, 32) || "Something ours",
+      budget,
+      duration: duration.trim().slice(0, 20) || "Flexible",
+      distanceKm: 0,
+      location: location.trim().slice(0, 60) || "To decide together",
+      vibes: ["Made by you"],
+      image,
+      summary: summary.trim().slice(0, 240) || "A custom idea for the two of you.",
+      custom: true,
+    });
+  }
+  return (
+    <div className="sheet-backdrop" onMouseDown={onClose}>
+      <section className="bottom-sheet custom-activity-sheet" onMouseDown={(event) => event.stopPropagation()}>
+        <button className="sheet-close" onClick={onClose} aria-label="Close"><X size={20} /></button>
+        <span className="sheet-icon"><Plus size={25} /></span>
+        <p>ADD FOR BOTH OF YOU</p>
+        <h2>Create an activity idea.</h2>
+        <label>What should you do?<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Midnight dessert crawl" /></label>
+        <label>Why it sounds good<textarea value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="Three places, one dessert at each…" /></label>
+        <div className="form-grid">
+          <label>Category<input value={category} onChange={(event) => setCategory(event.target.value)} /></label>
+          <label>Duration<input value={duration} onChange={(event) => setDuration(event.target.value)} /></label>
+        </div>
+        <label>Place<input value={location} onChange={(event) => setLocation(event.target.value)} /></label>
+        <FilterGroup title="Budget" values={filterOptions.budgets} selected={[budget]} onToggle={(value) => setBudget(value as ActivityItem["budget"])} />
+        <button className="primary-button" disabled={title.trim().length < 2} onClick={submit}>Add to your shared deck</button>
       </section>
     </div>
   );
@@ -2204,15 +2464,25 @@ function InstallSheet({ onClose }: { onClose: () => void }) {
 function FiltersSheet({
   filters,
   deck,
+  mediaItems,
+  activityItems,
   onClose,
   onSave,
 }: {
   filters: DiscoveryFilters;
   deck: Deck;
+  mediaItems: MediaItem[];
+  activityItems: ActivityItem[];
   onClose: () => void;
   onSave: (filters: DiscoveryFilters) => void;
 }) {
   const [draft, setDraft] = useState(filters);
+  const mediaOptions = {
+    genres: [...new Set([...filterOptions.genres, ...mediaItems.flatMap((item) => item.genres)])].sort(),
+    languages: [...new Set([...filterOptions.languages, ...mediaItems.map((item) => item.language)])].sort(),
+    providers: [...new Set([...filterOptions.providers, ...mediaItems.flatMap((item) => item.providers)])].sort(),
+  };
+  const activityCategories = [...new Set([...filterOptions.activityCategories, ...activityItems.map((item) => item.category)])].sort();
   const toggle = (key: keyof DiscoveryFilters, value: string) =>
     setDraft((current) => {
       const list = current[key] as string[];
@@ -2241,6 +2511,13 @@ function FiltersSheet({
         {deck === "watch" ? (
           <>
             <FilterGroup
+              title="Country for streaming"
+              values={["IN", "DE", "GB", "US", "CA", "AU", "FR", "ES", "IT"]}
+              selected={[draft.region]}
+              onToggle={(value) => setDraft({ ...draft, region: value })}
+              labels={{ IN: "India", DE: "Germany", GB: "United Kingdom", US: "United States", CA: "Canada", AU: "Australia", FR: "France", ES: "Spain", IT: "Italy" }}
+            />
+            <FilterGroup
               title="Type"
               values={["movie", "show"]}
               selected={draft.mediaKinds}
@@ -2249,19 +2526,19 @@ function FiltersSheet({
             />
             <FilterGroup
               title="Genre"
-              values={filterOptions.genres}
+              values={mediaOptions.genres}
               selected={draft.genres}
               onToggle={(value) => toggle("genres", value)}
             />
             <FilterGroup
               title="Language"
-              values={filterOptions.languages}
+              values={mediaOptions.languages}
               selected={draft.languages}
               onToggle={(value) => toggle("languages", value)}
             />
             <FilterGroup
               title="Streaming on"
-              values={filterOptions.providers}
+              values={mediaOptions.providers}
               selected={draft.providers}
               onToggle={(value) => toggle("providers", value)}
             />
@@ -2270,7 +2547,7 @@ function FiltersSheet({
           <>
             <FilterGroup
               title="Category"
-              values={filterOptions.activityCategories}
+              values={activityCategories}
               selected={draft.activityCategories}
               onToggle={(value) => toggle("activityCategories", value)}
             />
@@ -2300,6 +2577,14 @@ function FiltersSheet({
             </label>
           </>
         )}
+        <button
+          className={`hide-completed-toggle ${draft.hideCompleted ? "selected" : ""}`}
+          onClick={() => setDraft({ ...draft, hideCompleted: !draft.hideCompleted })}
+        >
+          <EyeOff size={17} />
+          <span><b>Hide watched and done</b><small>Applies to both people</small></span>
+          <i>{draft.hideCompleted ? <Check size={13} /> : null}</i>
+        </button>
         <div className="sheet-actions">
           <button onClick={() => setDraft(defaultFilters)}>Reset</button>
           <button className="primary-button" onClick={() => onSave(draft)}>
@@ -2365,7 +2650,7 @@ function DetailSheet({
         <button className="sheet-close" onClick={onClose} aria-label="Close details">
           <X size={20} />
         </button>
-        <img src={item.image} alt="" />
+        <img src={item.image} alt="" onError={imageFallback} />
         <div>
           <span>
             {item.kind === "activity"
@@ -2403,9 +2688,14 @@ function DetailSheet({
               </li>
               <li>
                 <MonitorPlay size={16} />
-                Available on {item.providers.join(" · ")}
+                {item.providers.length ? `Available on ${item.providers.join(" · ")}` : "Check regional availability"}
               </li>
             </ul>
+          )}
+          {item.kind !== "activity" && item.watchLink && (
+            <a className="watch-link" href={item.watchLink} target="_blank" rel="noreferrer">
+              <Globe2 size={16} /> See where to watch
+            </a>
           )}
           {isMatch && (
             <div className="detail-actions">
@@ -2495,7 +2785,9 @@ function activeFilterCount(filters: DiscoveryFilters) {
     filters.mediaKinds.length +
     filters.activityCategories.length +
     filters.budgets.length +
-    (filters.maxDistanceKm < 25 ? 1 : 0)
+    (filters.maxDistanceKm < 25 ? 1 : 0) +
+    (filters.region && filters.region !== "IN" ? 1 : 0) +
+    (filters.hideCompleted ? 1 : 0)
   );
 }
 function latestEvent(events: PairEvent[], type: PairEventType, userId: string) {
@@ -2508,8 +2800,8 @@ function mostCommon(values: string[]) {
   values.forEach((value) => counts.set(value, (counts.get(value) ?? 0) + 1));
   return [...counts].sort((a, b) => b[1] - a[1])[0]?.[0];
 }
-function findItem(itemId: string, kind: PairEvent["kind"]): Item | undefined {
-  return ([...mediaCatalog, ...activityCatalog] as Item[]).find(
+function findItem(itemId: string, kind: PairEvent["kind"], catalog: Item[]): Item | undefined {
+  return catalog.find(
     (item) => item.id === itemId && item.kind === kind,
   );
 }
@@ -2524,10 +2816,19 @@ function dedupeEvents(events: PairEvent[]) {
       return true;
     });
 }
-function uniqueItemsForEvents(events: PairEvent[]) {
+function uniqueItemsForEvents(events: PairEvent[], catalog: Item[]) {
   return dedupeEvents(events)
-    .map((event) => findItem(event.itemId, event.kind))
+    .map((event) => findItem(event.itemId, event.kind, catalog))
     .filter((item): item is Item => Boolean(item));
+}
+function dedupeItems<T extends Item>(items: T[]): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = `${item.kind}:${item.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 function averageRating(events: PairEvent[]) {
   const ratings = events.map((event) => Number(event.payload.rating)).filter(Number.isFinite);

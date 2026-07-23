@@ -1592,6 +1592,49 @@ img {
 .confetti { position: absolute; top: 12%; color: #ffd364; font-size: 30px; letter-spacing: 16px; animation: confetti-float 2.4s ease-in-out infinite; }
 @keyframes confetti-float { 50% { transform: translateY(15px) rotate(5deg); opacity: .65; } }
 
+.account-choices { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; }
+.account-create { display: flex; min-height: 42px; align-items: center; justify-content: center; gap: 7px; color: var(--purple); border: 1px solid rgba(107,80,198,.22); border-radius: 13px; background: var(--purple-soft); font-size: 10px; font-weight: 850; }
+.account-choices .account-shortcut { padding: 8px 3px; font-size: 9px; }
+.discover-actions { display: flex; gap: 7px; }
+.discover-actions > button { position: relative; display: grid; width: 40px; height: 40px; place-items: center; color: var(--purple); border: 1px solid var(--line); border-radius: 13px; background: white; box-shadow: var(--shadow); }
+.discover-actions button i { position: absolute; top: -4px; right: -4px; display: grid; min-width: 17px; height: 17px; padding: 0 4px; place-items: center; color: white; border: 2px solid var(--paper); border-radius: 10px; background: var(--purple); font-size: 8px; font-style: normal; font-weight: 850; }
+.provider-badges { flex-wrap: wrap; }
+.provider-badges > span { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 7px; background: rgba(255,255,255,.14); }
+.provider-badges img { width: 16px !important; height: 16px !important; border-radius: 4px; object-fit: cover; }
+.catalog-notice { margin: 4px 20px 0; color: var(--muted); text-align: center; font-size: 8px; line-height: 1.35; }
+.load-more { display: block; margin: 5px auto 0; padding: 7px 11px; color: var(--purple); border-radius: 12px; background: var(--purple-soft); font-size: 9px; font-weight: 800; }
+.load-more:disabled { opacity: .55; }
+.hide-completed-toggle { display: flex; width: 100%; align-items: center; gap: 10px; margin: 14px 0; padding: 11px 12px; text-align: left; border: 1px solid var(--line); border-radius: 14px; background: white; }
+.hide-completed-toggle > svg { color: var(--purple); }
+.hide-completed-toggle > span { flex: 1; }
+.hide-completed-toggle b, .hide-completed-toggle small { display: block; }
+.hide-completed-toggle b { font-size: 10px; }
+.hide-completed-toggle small { margin-top: 2px; color: var(--muted); font-size: 8px; }
+.hide-completed-toggle > i { display: grid; width: 20px; height: 20px; place-items: center; border: 1px solid var(--line); border-radius: 7px; }
+.hide-completed-toggle.selected { border-color: rgba(107,80,198,.25); background: var(--purple-soft); }
+.hide-completed-toggle.selected > i { color: white; border-color: var(--purple); background: var(--purple); }
+.notification-card .outline-button { width: 100%; margin-top: 13px; gap: 7px; }
+.notification-card .outline-button:disabled { color: var(--teal); background: rgba(61,167,162,.08); opacity: 1; }
+.data-credit { display: grid; justify-items: center; gap: 5px; margin: 16px 15px; color: var(--muted); text-align: center; font-size: 8px; line-height: 1.35; }
+.data-credit img { width: 68px; height: auto; }
+.data-credit small { font-size: 8px; }
+.watch-link { display: inline-flex; align-items: center; gap: 6px; margin-top: 12px; padding: 8px 10px; color: var(--purple); border-radius: 11px; background: var(--purple-soft); font-size: 9px; font-weight: 800; }
+.custom-activity-sheet { max-height: min(780px, 92dvh); overflow-y: auto; padding: 31px 22px calc(22px + env(safe-area-inset-bottom)); }
+.custom-activity-sheet > p { margin: 9px 0 4px; color: var(--purple); font-size: 8px; font-weight: 850; letter-spacing: 1.2px; }
+.custom-activity-sheet h2 { margin: 0 0 18px; font-size: 24px; }
+.sheet-icon { display: grid; width: 45px; height: 45px; place-items: center; color: var(--purple); border-radius: 15px; background: var(--purple-soft); }
+.custom-activity-sheet label { display: block; margin-bottom: 11px; color: var(--muted); font-size: 9px; font-weight: 750; }
+.custom-activity-sheet input, .custom-activity-sheet textarea { width: 100%; margin-top: 6px; padding: 0 12px; color: var(--ink); border: 1px solid var(--line); border-radius: 12px; background: white; font: inherit; }
+.custom-activity-sheet input { height: 44px; }
+.custom-activity-sheet textarea { min-height: 76px; padding-top: 11px; resize: vertical; }
+.custom-activity-sheet .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.custom-activity-sheet .primary-button { width: 100%; }
+
+@media (max-width: 390px) {
+  .account-choices { grid-template-columns: 1fr; }
+  .account-choices .account-shortcut { min-height: 30px; }
+}
+
 @media (min-width: 700px) {
   body {
     padding: 24px 0;

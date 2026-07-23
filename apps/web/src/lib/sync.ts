@@ -8,6 +8,8 @@ import {
   type ContentMode,
   type DiscoveryFilters,
   type Member,
+  type MediaItem,
+  type ActivityItem,
   type PairEvent,
   type PairEventType,
   type SessionSnapshot,
@@ -128,6 +130,15 @@ export async function sendCloudSignInLink(email: string, redirectTo: string) {
   if (error) throw error;
 }
 
+export async function sendCloudSignUpLink(email: string, redirectTo: string) {
+  const client = requireCloud();
+  const { error } = await client.auth.signInWithOtp({
+    email: email.trim().toLowerCase(),
+    options: { emailRedirectTo: redirectTo, shouldCreateUser: true },
+  });
+  if (error) throw error;
+}
+
 export async function signOutCloudAccount() {
   const client = requireCloud();
   const { error } = await client.auth.signOut();
@@ -178,6 +189,7 @@ export async function loadCloudSnapshot(
     { data: memberRows, error: memberError },
     { data: voteRows, error: voteError },
     { data: eventRows, error: eventError },
+    { data: itemRows, error: itemError },
   ] = await Promise.all([
     client.from("shared_lists").select("*").eq("id", listId).single(),
     client
@@ -192,11 +204,16 @@ export async function loadCloudSnapshot(
       .from("pair_events")
       .select("id,user_id,event_type,item_id,kind,payload,updated_at")
       .eq("list_id", listId),
+    client
+      .from("list_items")
+      .select("data")
+      .eq("list_id", listId),
   ]);
   if (listError) throw listError;
   if (memberError) throw memberError;
   if (voteError) throw voteError;
   if (eventError) throw eventError;
+  if (itemError) throw itemError;
   const members: Member[] = (memberRows ?? []).map((row) => {
     const profile = Array.isArray(row.profiles)
       ? row.profiles[0]
@@ -223,11 +240,29 @@ export async function loadCloudSnapshot(
     payload: (row.payload ?? {}) as PairEvent["payload"],
     updatedAt: String(row.updated_at),
   }));
-  return { user, list: listFromRow(listRow), members, votes, events };
+  const savedItems = (itemRows ?? [])
+    .map((row) => row.data as MediaItem | ActivityItem)
+    .filter((item) => Boolean(item?.id && item?.kind));
+  return { user, list: listFromRow(listRow), members, votes, events, savedItems };
 }
 
-export async function saveCloudVote(listId: string, vote: Vote) {
+export async function saveCloudVote(
+  listId: string,
+  vote: Vote,
+  item: MediaItem | ActivityItem,
+) {
   const client = requireCloud();
+  const { error: itemError } = await client.from("list_items").upsert(
+    {
+      list_id: listId,
+      item_id: item.id,
+      kind: item.kind,
+      added_by: vote.userId,
+      data: item,
+    },
+    { onConflict: "list_id,item_id,kind" },
+  );
+  if (itemError) throw itemError;
   const { error } = await client.from("votes").upsert(
     {
       list_id: listId,
@@ -239,6 +274,85 @@ export async function saveCloudVote(listId: string, vote: Vote) {
     { onConflict: "list_id,user_id,item_id,kind" },
   );
   if (error) throw error;
+}
+
+export async function saveCloudCustomActivity(
+  listId: string,
+  userId: string,
+  item: ActivityItem,
+) {
+  const client = requireCloud();
+  const { error } = await client.from("list_items").upsert(
+    {
+      list_id: listId,
+      item_id: item.id,
+      kind: item.kind,
+      added_by: userId,
+      data: item,
+    },
+    { onConflict: "list_id,item_id,kind" },
+  );
+  if (error) throw error;
+}
+
+export async function fetchCloudCatalog(input: {
+  page: number;
+  filters: DiscoveryFilters;
+}): Promise<{ items: MediaItem[]; hasMore: boolean }> {
+  const client = requireCloud();
+  const { data, error } = await client.functions.invoke("tmdb-catalog", {
+    body: input,
+  });
+  if (error) throw error;
+  return data as { items: MediaItem[]; hasMore: boolean };
+}
+
+function urlBase64ToUint8Array(value: string) {
+  const padding = "=".repeat((4 - (value.length % 4)) % 4);
+  const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = window.atob(base64);
+  return Uint8Array.from([...raw].map((char) => char.charCodeAt(0)));
+}
+
+export async function enableCloudNotifications(
+  listId: string,
+  vapidPublicKey: string,
+) {
+  const client = requireCloud();
+  if (!("serviceWorker" in navigator) || !("PushManager" in window))
+    throw new Error("Push notifications are not supported on this device.");
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted")
+    throw new Error("Notifications were not allowed.");
+  const registration = await navigator.serviceWorker.ready;
+  const subscription =
+    (await registration.pushManager.getSubscription()) ??
+    (await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+    }));
+  const { error } = await client.from("push_subscriptions").upsert(
+    {
+      list_id: listId,
+      user_id: (await client.auth.getUser()).data.user?.id,
+      endpoint: subscription.endpoint,
+      subscription: subscription.toJSON(),
+    },
+    { onConflict: "user_id,endpoint" },
+  );
+  if (error) throw error;
+}
+
+export async function notifyCloudPartner(input: {
+  listId: string;
+  type: "vote" | PairEventType;
+  itemTitle?: string;
+}) {
+  const client = requireCloud();
+  const { error } = await client.functions.invoke("notify-partner", {
+    body: input,
+  });
+  if (error) console.warn("Partner notification could not be sent", error);
 }
 
 export async function updateCloudList(list: SharedList) {
@@ -290,6 +404,7 @@ export function subscribeToCloudList(
     "list_members",
     "votes",
     "pair_events",
+    "list_items",
   ].map((table) =>
     supabase
       .channel(`${table}:${listId}:${crypto.randomUUID()}`)

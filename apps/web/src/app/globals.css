@@ -938,6 +938,40 @@ img {
   width: 100%;
   max-width: 470px;
 }
+.account-return-card {
+  max-width: 440px;
+}
+.account-return-icon {
+  display: grid;
+  width: 58px;
+  height: 58px;
+  margin-top: clamp(34px, 8vh, 72px);
+  place-items: center;
+  color: #277c79;
+  border: 1px solid rgba(61, 167, 162, 0.16);
+  border-radius: 19px;
+  background: #e4f4f1;
+  box-shadow: 0 12px 28px rgba(46, 123, 119, 0.1);
+}
+.account-return-card .onboarding-copy {
+  margin-top: 22px;
+}
+.account-return-card .onboarding-copy > span strong {
+  color: var(--ink);
+}
+.account-return-card .primary-button {
+  gap: 7px;
+}
+.account-ready-note {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 12px;
+  color: var(--teal);
+  font-size: 10px;
+  font-weight: 750;
+}
 .invite-onboarding-card {
   position: relative;
 }

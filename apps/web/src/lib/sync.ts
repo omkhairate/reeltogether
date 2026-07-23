@@ -70,15 +70,40 @@ export async function ensureCloudUser(displayName: string): Promise<Member> {
 
 export async function getCloudIdentity(): Promise<CloudIdentity | null> {
   const client = requireCloud();
-  const { data, error } = await client.auth.getSession();
-  if (error) throw error;
-  const user = data.session?.user;
+  const { data, error } = await client.auth.getUser();
+  if (error) {
+    if (
+      !data.user &&
+      (error.name === "AuthSessionMissingError" ||
+        error.message.toLowerCase().includes("session missing"))
+    )
+      return null;
+    throw error;
+  }
+  const user = data.user;
   if (!user) return null;
   return {
     id: user.id,
     email: user.email ?? null,
     isAnonymous: user.is_anonymous ?? !user.email,
   };
+}
+
+export async function restoreCloudList(listId: string): Promise<SessionSnapshot | null> {
+  const client = requireCloud();
+  const identity = await getCloudIdentity();
+  if (!identity) return null;
+  const { data: profile, error } = await client
+    .from("profiles")
+    .select("display_name")
+    .eq("id", identity.id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!profile) return null;
+  return loadCloudSnapshot(
+    { id: identity.id, displayName: String(profile.display_name) },
+    listId,
+  );
 }
 
 export async function restoreCloudAccount(): Promise<SessionSnapshot | null> {

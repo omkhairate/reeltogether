@@ -49,6 +49,7 @@ import {
   joinCloudList,
   loadCloudSnapshot,
   restoreCloudAccount,
+  restoreCloudList,
   saveCloudCustomActivity,
   saveCloudPairEvent,
   saveCloudVote,
@@ -175,6 +176,7 @@ export default function ReelTogetherApp() {
   const [showAddActivity, setShowAddActivity] = useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [showPairWelcome, setShowPairWelcome] = useState(false);
+  const [accountReturn, setAccountReturn] = useState<{ listId: string; listName: string } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
@@ -197,7 +199,11 @@ export default function ReelTogetherApp() {
   useEffect(() => {
     async function restore() {
       const saved = localStorage.getItem(STORAGE_KEY);
-      const setupFromUrl = new URLSearchParams(window.location.search).get("setup");
+      const urlParams = new URLSearchParams(window.location.search);
+      const setupFromUrl = urlParams.get("setup");
+      const securedReturn = urlParams.get("secured") === "1";
+      const returnListId = urlParams.get("returnList") ?? "";
+      const returnListName = urlParams.get("returnName") ?? "your shared list";
       const setupValue = setupFromUrl ?? localStorage.getItem(PENDING_SETUP_KEY);
       let pending: PendingSetup | null = null;
       if (setupValue) {
@@ -228,9 +234,26 @@ export default function ReelTogetherApp() {
         setIdentity(currentIdentity);
         if (!currentIdentity) {
           localStorage.removeItem(STORAGE_KEY);
+          if (securedReturn)
+            setAccountReturn({ listId: returnListId, listName: returnListName });
           return;
         }
-        if (pending?.inviteCode) {
+        if (securedReturn && returnListId) {
+          try {
+            const restoredList = await restoreCloudList(returnListId);
+            if (!restoredList) throw new Error("The shared list could not be restored.");
+            setSession(restoredList);
+            setAccountReturn(null);
+            localStorage.removeItem(PENDING_SETUP_KEY);
+            history.replaceState({}, "", window.location.pathname);
+            notify("Account secured — your shared list is safe");
+          } catch (reason) {
+            console.error(reason);
+            setSession(null);
+            localStorage.removeItem(STORAGE_KEY);
+            setAccountReturn({ listId: returnListId, listName: returnListName });
+          }
+        } else if (pending?.inviteCode) {
           const user = await ensureCloudUser(pending.name);
           const listId = await joinCloudList(pending.inviteCode);
           setSession(await loadCloudSnapshot(user, listId));
@@ -265,7 +288,7 @@ export default function ReelTogetherApp() {
       }
     }
     void restore();
-  }, []);
+  }, [notify]);
 
   const catalogQuery = JSON.stringify(session?.list.filters ?? defaultFilters);
   useEffect(() => {
@@ -666,7 +689,16 @@ export default function ReelTogetherApp() {
   if (!session)
     return (
       <>
-        <Onboarding
+        {accountReturn ? (
+          <AccountReturnScreen
+            listName={accountReturn.listName}
+            onSignIn={() => {
+              setPendingSetup(null);
+              setAccountMode("signin");
+              setShowAccount(true);
+            }}
+          />
+        ) : <Onboarding
           identity={identity}
           onComplete={(next, joined) => {
             setSession(next);
@@ -686,7 +718,7 @@ export default function ReelTogetherApp() {
             setShowAccount(true);
           }}
           isInstalled={isInstalled}
-        />
+        />}
         {showInstallHelp && (
           <InstallSheet onClose={() => setShowInstallHelp(false)} />
         )}
@@ -695,6 +727,8 @@ export default function ReelTogetherApp() {
             mode={accountMode}
             identity={identity}
             pendingSetup={pendingSetup}
+            activeListId={accountReturn?.listId}
+            activeListName={accountReturn?.listName}
             onClose={() => setShowAccount(false)}
             onSignedOut={() => undefined}
           />
@@ -842,6 +876,8 @@ export default function ReelTogetherApp() {
         <AccountSheet
           mode={accountMode}
           identity={identity}
+          activeListId={session.list.id}
+          activeListName={session.list.name}
           onClose={() => setShowAccount(false)}
           onSignedOut={() => {
             localStorage.removeItem(STORAGE_KEY);
@@ -935,6 +971,37 @@ function LoadingScreen() {
       <img src={`${basePath}/icons/brand-mark.png`} alt="" />
       <strong>reeltogether</strong>
       <span className="loader" />
+    </main>
+  );
+}
+
+function AccountReturnScreen({
+  listName,
+  onSignIn,
+}: {
+  listName: string;
+  onSignIn: () => void;
+}) {
+  return (
+    <main className="onboarding account-return-screen">
+      <section className="onboarding-card account-return-card">
+        <div className="brand">
+          <img src={`${basePath}/icons/brand-mark.png`} alt="" />
+          <strong>reeltogether</strong>
+        </div>
+        <div className="account-return-icon"><ShieldCheck size={30} /></div>
+        <div className="onboarding-copy">
+          <p>EMAIL CONFIRMED</p>
+          <h1>Your shared space is still here.</h1>
+          <span>
+            Your email is ready. Sign in once to reopen <strong>{listName}</strong> with the same person, picks, and matches.
+          </span>
+        </div>
+        <button className="primary-button" onClick={onSignIn}>
+          <Mail size={17} /> Sign in and restore my list
+        </button>
+        <div className="account-ready-note"><ShieldCheck size={16} /> We won’t create a new list</div>
+      </section>
     </main>
   );
 }
@@ -2382,12 +2449,16 @@ function AccountSheet({
   mode,
   identity,
   pendingSetup,
+  activeListId,
+  activeListName,
   onClose,
   onSignedOut,
 }: {
   mode: "signup" | "signin" | "manage";
   identity: CloudIdentity | null;
   pendingSetup?: PendingSetup | null;
+  activeListId?: string | undefined;
+  activeListName?: string | undefined;
   onClose: () => void;
   onSignedOut: () => void;
 }) {
@@ -2407,6 +2478,11 @@ function AccountSheet({
       if ((mode === "signup" || mode === "signin") && pendingSetup) {
         serializedSetup = JSON.stringify(pendingSetup);
         redirect.searchParams.set("setup", serializedSetup);
+      }
+      if ((securing || mode === "signin") && activeListId) {
+        redirect.searchParams.set("secured", "1");
+        redirect.searchParams.set("returnList", activeListId);
+        redirect.searchParams.set("returnName", activeListName || "your shared list");
       }
       const redirectTo = redirect.toString();
       if (securing) await secureCloudAccount(email, redirectTo);

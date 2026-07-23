@@ -939,7 +939,7 @@ img {
   max-width: 470px;
 }
 .onboarding-copy {
-  margin: clamp(42px, 10vh, 88px) 0 28px;
+  margin: clamp(30px, 6vh, 54px) 0 24px;
 }
 .onboarding-copy h1 {
   max-width: 420px;
@@ -1592,9 +1592,9 @@ img {
 .confetti { position: absolute; top: 12%; color: #ffd364; font-size: 30px; letter-spacing: 16px; animation: confetti-float 2.4s ease-in-out infinite; }
 @keyframes confetti-float { 50% { transform: translateY(15px) rotate(5deg); opacity: .65; } }
 
-.account-choices { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; }
-.account-create { display: flex; min-height: 42px; align-items: center; justify-content: center; gap: 7px; color: var(--purple); border: 1px solid rgba(107,80,198,.22); border-radius: 13px; background: var(--purple-soft); font-size: 10px; font-weight: 850; }
-.account-choices .account-shortcut { padding: 8px 3px; font-size: 9px; }
+.account-choices { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; }
+.account-create { display: flex; width: 100%; min-height: 43px; align-items: center; justify-content: center; gap: 7px; color: var(--purple); border: 1px solid rgba(107,80,198,.22); border-radius: 13px; background: var(--purple-soft); font-size: 11px; font-weight: 850; }
+.account-choices .account-shortcut { min-height: 34px; margin: 0; padding: 6px 3px; font-size: 10px; }
 .discover-actions { display: flex; gap: 7px; }
 .discover-actions > button { position: relative; display: grid; width: 40px; height: 40px; place-items: center; color: var(--purple); border: 1px solid var(--line); border-radius: 13px; background: white; box-shadow: var(--shadow); }
 .discover-actions button i { position: absolute; top: -4px; right: -4px; display: grid; min-width: 17px; height: 17px; padding: 0 4px; place-items: center; color: white; border: 2px solid var(--paper); border-radius: 10px; background: var(--purple); font-size: 8px; font-style: normal; font-weight: 850; }
@@ -1629,11 +1629,6 @@ img {
 .custom-activity-sheet textarea { min-height: 76px; padding-top: 11px; resize: vertical; }
 .custom-activity-sheet .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .custom-activity-sheet .primary-button { width: 100%; }
-
-@media (max-width: 390px) {
-  .account-choices { grid-template-columns: 1fr; }
-  .account-choices .account-shortcut { min-height: 30px; }
-}
 
 @media (min-width: 700px) {
   body {

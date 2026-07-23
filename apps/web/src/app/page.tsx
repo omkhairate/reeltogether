@@ -17,11 +17,14 @@ import {
   House,
   Info,
   ListFilter,
+  LogOut,
+  Mail,
   MapPin,
   MonitorPlay,
   Plus,
   Send,
   Share2,
+  ShieldCheck,
   Sparkles,
   Star,
   ThumbsUp,
@@ -33,11 +36,17 @@ import {
   cloudConfigured,
   createCloudList,
   ensureCloudUser,
+  getCloudIdentity,
   joinCloudList,
   loadCloudSnapshot,
+  restoreCloudAccount,
   saveCloudVote,
+  secureCloudAccount,
+  sendCloudSignInLink,
+  signOutCloudAccount,
   subscribeToCloudList,
   updateCloudList,
+  type CloudIdentity,
 } from "@/lib/sync";
 import { defaultFilters, type ActivityItem, type ContentKind, type DiscoveryFilters, type MediaItem, type SessionSnapshot, type SharedList, type VoteDecision } from "@/lib/types";
 
@@ -85,7 +94,9 @@ export default function ReelTogetherApp() {
   const [error, setError] = useState("");
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [showInstallHelp, setShowInstallHelp] = useState(false);
+  const [showAccount, setShowAccount] = useState(false);
   const [isInstalled, setIsInstalled] = useState(false);
+  const [identity, setIdentity] = useState<CloudIdentity | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const notify = useCallback((message: string) => {
@@ -104,27 +115,38 @@ export default function ReelTogetherApp() {
   }, []);
 
   useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (!saved) {
-      setLoading(false);
-      return;
-    }
-    try {
-      const parsed = JSON.parse(saved) as SessionSnapshot;
-      if (cloudConfigured) {
-        ensureCloudUser(parsed.user.displayName)
-          .then((user) => loadCloudSnapshot(user, parsed.list.id))
-          .then(setSession)
-          .catch(() => localStorage.removeItem(STORAGE_KEY))
-          .finally(() => setLoading(false));
-      } else {
+    async function restore() {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      let parsed: SessionSnapshot | null = null;
+      if (saved) {
+        try { parsed = JSON.parse(saved) as SessionSnapshot; }
+        catch { localStorage.removeItem(STORAGE_KEY); }
+      }
+      if (!cloudConfigured) {
         setSession(parsed);
         setLoading(false);
+        return;
       }
-    } catch {
-      localStorage.removeItem(STORAGE_KEY);
-      setLoading(false);
+      try {
+        const currentIdentity = await getCloudIdentity();
+        setIdentity(currentIdentity);
+        if (!currentIdentity) {
+          localStorage.removeItem(STORAGE_KEY);
+          return;
+        }
+        if (parsed && parsed.user.id === currentIdentity.id) {
+          setSession(await loadCloudSnapshot(parsed.user, parsed.list.id));
+        } else {
+          const restored = await restoreCloudAccount();
+          setSession(restored);
+          if (!restored) localStorage.removeItem(STORAGE_KEY);
+        }
+      } catch (reason) {
+        console.error(reason);
+        localStorage.removeItem(STORAGE_KEY);
+      } finally { setLoading(false); }
     }
+    void restore();
   }, []);
 
   useEffect(() => {
@@ -249,7 +271,7 @@ export default function ReelTogetherApp() {
   }
 
   if (loading) return <LoadingScreen />;
-  if (!session) return <><Onboarding onComplete={setSession} onError={setError} onInstall={installApp} isInstalled={isInstalled} />{showInstallHelp && <InstallSheet onClose={() => setShowInstallHelp(false)} />}</>;
+  if (!session) return <><Onboarding onComplete={(next) => { setSession(next); void getCloudIdentity().then(setIdentity); }} onError={setError} onInstall={installApp} onSignIn={() => setShowAccount(true)} isInstalled={isInstalled} />{showInstallHelp && <InstallSheet onClose={() => setShowInstallHelp(false)} />}{showAccount && <AccountSheet mode="signin" identity={identity} onClose={() => setShowAccount(false)} onSignedOut={() => undefined} />}{error && <div className="error-banner" role="alert"><span>{error}</span><button onClick={() => setError("")} aria-label="Dismiss"><X size={17} /></button></div>}</>;
 
   const counts = { watch: mediaQueue.length, activities: activityQueue.length };
   return (
@@ -258,12 +280,13 @@ export default function ReelTogetherApp() {
         {view === "home" && <HomeView session={session} matches={matches} remaining={counts.watch + counts.activities} onNavigate={setView} onShare={shareInvite} onInstall={installApp} isInstalled={isInstalled} onDetail={setDetail} cloud={cloudConfigured} />}
         {view === "discover" && <DiscoverView session={session} deck={deck} onDeck={setDeck} mediaQueue={mediaQueue} activityQueue={activityQueue} onVote={castVote} onFilters={() => setShowFilters(true)} onDetail={setDetail} />}
         {view === "matches" && <MatchesView matches={matches} session={session} onDetail={setDetail} />}
-        {view === "lists" && <ListsView session={session} cloud={cloudConfigured} onChange={changeList} onShare={shareInvite} onInstall={installApp} isInstalled={isInstalled} onReset={() => { localStorage.removeItem(STORAGE_KEY); setSession(null); }} />}
+        {view === "lists" && <ListsView session={session} identity={identity} cloud={cloudConfigured} onChange={changeList} onShare={shareInvite} onAccount={() => setShowAccount(true)} onInstall={installApp} isInstalled={isInstalled} onReset={() => { const leave = cloudConfigured ? signOutCloudAccount().catch(() => undefined) : Promise.resolve(); void leave.finally(() => { localStorage.removeItem(STORAGE_KEY); setIdentity(null); setSession(null); }); }} />}
       </div>
       <TabBar view={view} matchCount={matches.length} onNavigate={setView} />
       {showFilters && <FiltersSheet filters={session.list.filters} deck={deck} onClose={() => setShowFilters(false)} onSave={(filters) => { void changeList({ ...session.list, filters }); setShowFilters(false); notify("Shared filters updated"); }} />}
       {detail && <DetailSheet item={detail} onClose={() => setDetail(null)} />}
       {showInstallHelp && <InstallSheet onClose={() => setShowInstallHelp(false)} />}
+      {showAccount && <AccountSheet mode="manage" identity={identity} onClose={() => setShowAccount(false)} onSignedOut={() => { localStorage.removeItem(STORAGE_KEY); setIdentity(null); setSession(null); setShowAccount(false); }} />}
       {toast && <div className="toast" role="status">{toast}</div>}
       {error && <div className="error-banner" role="alert"><span>{error}</span><button onClick={() => setError("")} aria-label="Dismiss"><X size={17} /></button></div>}
     </main>
@@ -274,7 +297,7 @@ function LoadingScreen() {
   return <main className="loading-screen"><img src={`${basePath}/icons/brand-mark.png`} alt="" /><strong>reeltogether</strong><span className="loader" /></main>;
 }
 
-function Onboarding({ onComplete, onError, onInstall, isInstalled }: { onComplete: (session: SessionSnapshot) => void; onError: (message: string) => void; onInstall: () => void; isInstalled: boolean }) {
+function Onboarding({ onComplete, onError, onInstall, onSignIn, isInstalled }: { onComplete: (session: SessionSnapshot) => void; onError: (message: string) => void; onInstall: () => void; onSignIn: () => void; isInstalled: boolean }) {
   const [name, setName] = useState("");
   const [listName, setListName] = useState("Sunday sofa club");
   const [busy, setBusy] = useState(false);
@@ -309,6 +332,7 @@ function Onboarding({ onComplete, onError, onInstall, isInstalled }: { onComplet
         <label>Your name<input autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} placeholder="What should your friend see?" /></label>
         {!inviteCode && <label>List name<input value={listName} onChange={(event) => setListName(event.target.value)} /></label>}
         <button className="primary-button" disabled={busy || name.trim().length < 2} onClick={submit}>{busy ? "Getting things ready…" : inviteCode ? "Join shared list" : "Create shared list"}</button>
+        {cloudConfigured && <button className="account-shortcut" onClick={onSignIn}><Mail size={16} /> Already have an account? <strong>Sign in</strong></button>}
         {!isInstalled && <button className="install-shortcut" onClick={onInstall}><Download size={17} /> Install ReelTogether</button>}
         <div className={`mode-note ${cloudConfigured ? "live" : "demo"}`}><span />{cloudConfigured ? "Private syncing is ready" : "Demo mode — connect Supabase before inviting"}</div>
       </section>
@@ -380,8 +404,39 @@ function MatchesView({ matches, session, onDetail }: { matches: Item[]; session:
   return <div className="page matches-page"><header className="page-title"><p>SHARED PICKS</p><h1>Matches</h1></header><div className="deck-switch"><button className={area === "watch" ? "active" : ""} onClick={() => setArea("watch")}>Watch</button><button className={area === "activities" ? "active" : ""} onClick={() => setArea("activities")}>Bucket list</button></div>{visible.length ? <div className="match-list">{visible.map((item) => { const picks = new Set(session.votes.filter((vote) => vote.itemId === item.id && vote.kind === item.kind && vote.decision === "pick").map((vote) => vote.userId)).size; return <button key={`${item.kind}-${item.id}`} onClick={() => onDetail(item)}><img src={item.image} alt="" /><div><span>{item.kind === "activity" ? "BUCKET LIST" : "MATCH"}</span><h2>{item.title}</h2><p><CheckCircle2 size={14} /> {picks} of {session.members.length} picked</p></div><ChevronRight size={19} /></button>; })}</div> : <div className="large-empty"><Sparkles size={30} /><h2>No matches yet</h2><p>Keep swiping. Shared picks appear here when the list reaches its threshold.</p></div>}</div>;
 }
 
-function ListsView({ session, cloud, onChange, onShare, onInstall, isInstalled, onReset }: { session: SessionSnapshot; cloud: boolean; onChange: (list: SharedList) => void; onShare: () => void; onInstall: () => void; isInstalled: boolean; onReset: () => void }) {
-  return <div className="page lists-page"><header className="page-title"><p>YOUR SPACE</p><h1>{session.list.name}</h1></header><section className="settings-card"><div className="setting-heading"><span><Users size={20} /></span><div><h2>Members</h2><p>{cloud ? "Changes sync for everyone" : "Demo data stays on this device"}</p></div></div>{session.members.map((member, index) => <div className="member-row" key={member.id}><span style={{ background: avatarColor(index) }}>{initials(member.displayName)}</span><div><b>{member.displayName}</b><small>{member.id === session.user.id ? "You" : "Can vote and change filters"}</small></div></div>)}<button className="outline-button" onClick={onShare}><Share2 size={17} /> Invite a friend</button></section><section className="settings-card"><div className="setting-heading"><span><Check size={20} /></span><div><h2>Match threshold</h2><p>How many picks create a match?</p></div></div><div className="stepper"><button onClick={() => onChange({ ...session.list, threshold: Math.max(1, session.list.threshold - 1) })}>−</button><strong>{session.list.threshold}</strong><span>of {session.members.length}</span><button onClick={() => onChange({ ...session.list, threshold: Math.min(Math.max(1, session.members.length), session.list.threshold + 1) })}>+</button></div></section>{!isInstalled && <section className="install-card"><div className="setting-heading"><span><Download size={20} /></span><div><h2>Use it like an app</h2><p>Put ReelTogether on this device’s Home Screen.</p></div></div><button className="primary-button" onClick={onInstall}><Download size={17} /> Install app</button></section>}<button className="text-button danger" onClick={onReset}>Leave this device session</button></div>;
+function ListsView({ session, identity, cloud, onChange, onShare, onAccount, onInstall, isInstalled, onReset }: { session: SessionSnapshot; identity: CloudIdentity | null; cloud: boolean; onChange: (list: SharedList) => void; onShare: () => void; onAccount: () => void; onInstall: () => void; isInstalled: boolean; onReset: () => void }) {
+  return <div className="page lists-page"><header className="page-title"><p>YOUR SPACE</p><h1>{session.list.name}</h1></header>{cloud && <section className={`account-card ${identity && !identity.isAnonymous ? "secured" : ""}`}><span><ShieldCheck size={21} /></span><div><h2>{identity && !identity.isAnonymous ? "Account secured" : "Secure your account"}</h2><p>{identity && !identity.isAnonymous ? identity.email : "Recover your lists and votes on any device."}</p></div><button onClick={onAccount}>{identity && !identity.isAnonymous ? "Manage" : "Add email"}</button></section>}<section className="settings-card"><div className="setting-heading"><span><Users size={20} /></span><div><h2>Members</h2><p>{cloud ? "Changes sync for everyone" : "Demo data stays on this device"}</p></div></div>{session.members.map((member, index) => <div className="member-row" key={member.id}><span style={{ background: avatarColor(index) }}>{initials(member.displayName)}</span><div><b>{member.displayName}</b><small>{member.id === session.user.id ? "You" : "Can vote and change filters"}</small></div></div>)}<button className="outline-button" onClick={onShare}><Share2 size={17} /> Invite a friend</button></section><section className="settings-card"><div className="setting-heading"><span><Check size={20} /></span><div><h2>Match threshold</h2><p>How many picks create a match?</p></div></div><div className="stepper"><button onClick={() => onChange({ ...session.list, threshold: Math.max(1, session.list.threshold - 1) })}>−</button><strong>{session.list.threshold}</strong><span>of {session.members.length}</span><button onClick={() => onChange({ ...session.list, threshold: Math.min(Math.max(1, session.members.length), session.list.threshold + 1) })}>+</button></div></section>{!isInstalled && <section className="install-card"><div className="setting-heading"><span><Download size={20} /></span><div><h2>Use it like an app</h2><p>Put ReelTogether on this device’s Home Screen.</p></div></div><button className="primary-button" onClick={onInstall}><Download size={17} /> Install app</button></section>}<button className="text-button danger" onClick={onReset}>Leave this device session</button></div>;
+}
+
+function AccountSheet({ mode, identity, onClose, onSignedOut }: { mode: "signin" | "manage"; identity: CloudIdentity | null; onClose: () => void; onSignedOut: () => void }) {
+  const [email, setEmail] = useState(identity?.email ?? "");
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [message, setMessage] = useState("");
+  const securing = mode === "manage" && Boolean(identity?.isAnonymous);
+
+  async function submit() {
+    if (!email.includes("@")) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const redirectTo = `${window.location.origin}${window.location.pathname}`;
+      if (securing) await secureCloudAccount(email, redirectTo);
+      else await sendCloudSignInLink(email, redirectTo);
+      setSent(true);
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : "We could not send the email.");
+    } finally { setBusy(false); }
+  }
+
+  async function signOut() {
+    setBusy(true);
+    try { await signOutCloudAccount(); onSignedOut(); }
+    catch (reason) { setMessage(reason instanceof Error ? reason.message : "Could not sign out."); setBusy(false); }
+  }
+
+  const permanent = mode === "manage" && Boolean(identity && !identity.isAnonymous);
+  return <div className="sheet-backdrop" onMouseDown={onClose}><section className="bottom-sheet account-sheet" onMouseDown={(event) => event.stopPropagation()}><button className="sheet-close" onClick={onClose} aria-label="Close"><X size={20} /></button>{sent ? <div className="email-sent"><span><Mail size={27} /></span><p>CHECK YOUR EMAIL</p><h2>One tap and you’re set.</h2><small>We sent a secure link to <strong>{email}</strong>. Open it on this device to finish.</small><button className="primary-button" onClick={onClose}>Done</button></div> : permanent ? <div className="account-manage"><span><ShieldCheck size={27} /></span><p>YOUR ACCOUNT</p><h2>You’re safely signed in.</h2><small>Your lists and votes can be restored with <strong>{identity?.email}</strong>.</small><button className="outline-button sign-out" disabled={busy} onClick={signOut}><LogOut size={16} /> Sign out</button>{message && <div className="form-message">{message}</div>}</div> : <div className="account-form"><span><Mail size={27} /></span><p>{securing ? "SAVE YOUR PROGRESS" : "WELCOME BACK"}</p><h2>{securing ? "Secure your account." : "Sign in to ReelTogether."}</h2><small>{securing ? "Link an email without losing this list or any of your votes." : "We’ll email you a secure sign-in link—no password needed."}</small><label>Email address<input type="email" autoComplete="email" inputMode="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /></label><button className="primary-button" disabled={busy || !email.includes("@")} onClick={submit}>{busy ? "Sending…" : securing ? "Secure my account" : "Email me a sign-in link"}</button>{message && <div className="form-message">{message}</div>}</div>}</section></div>;
 }
 
 function InstallSheet({ onClose }: { onClose: () => void }) {

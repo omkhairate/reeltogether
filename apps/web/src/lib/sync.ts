@@ -7,6 +7,8 @@ const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 export const cloudConfigured = Boolean(supabaseUrl && supabaseKey);
 const supabase: SupabaseClient | null = cloudConfigured ? createClient(supabaseUrl!, supabaseKey!) : null;
 
+export type CloudIdentity = { id: string; email: string | null; isAnonymous: boolean };
+
 function requireCloud() {
   if (!supabase) throw new Error("Shared syncing has not been configured yet.");
   return supabase;
@@ -37,6 +39,54 @@ export async function ensureCloudUser(displayName: string): Promise<Member> {
   const { error } = await client.from("profiles").upsert({ id, display_name: cleanName });
   if (error) throw error;
   return { id, displayName: cleanName };
+}
+
+export async function getCloudIdentity(): Promise<CloudIdentity | null> {
+  const client = requireCloud();
+  const { data, error } = await client.auth.getSession();
+  if (error) throw error;
+  const user = data.session?.user;
+  if (!user) return null;
+  return { id: user.id, email: user.email ?? null, isAnonymous: user.is_anonymous ?? !user.email };
+}
+
+export async function restoreCloudAccount(): Promise<SessionSnapshot | null> {
+  const client = requireCloud();
+  const identity = await getCloudIdentity();
+  if (!identity) return null;
+  const [{ data: profile, error: profileError }, { data: memberships, error: membershipError }] = await Promise.all([
+    client.from("profiles").select("display_name").eq("id", identity.id).maybeSingle(),
+    client.from("list_members").select("list_id,joined_at").eq("user_id", identity.id).order("joined_at", { ascending: false }).limit(1),
+  ]);
+  if (profileError) throw profileError;
+  if (membershipError) throw membershipError;
+  const listId = memberships?.[0]?.list_id;
+  if (!profile || !listId) return null;
+  const user = { id: identity.id, displayName: String(profile.display_name) };
+  return loadCloudSnapshot(user, String(listId));
+}
+
+export async function secureCloudAccount(email: string, redirectTo: string) {
+  const client = requireCloud();
+  const identity = await getCloudIdentity();
+  if (!identity?.isAnonymous) throw new Error("This account is already secured.");
+  const { error } = await client.auth.updateUser({ email: email.trim().toLowerCase() }, { emailRedirectTo: redirectTo });
+  if (error) throw error;
+}
+
+export async function sendCloudSignInLink(email: string, redirectTo: string) {
+  const client = requireCloud();
+  const { error } = await client.auth.signInWithOtp({
+    email: email.trim().toLowerCase(),
+    options: { emailRedirectTo: redirectTo, shouldCreateUser: false },
+  });
+  if (error) throw error;
+}
+
+export async function signOutCloudAccount() {
+  const client = requireCloud();
+  const { error } = await client.auth.signOut();
+  if (error) throw error;
 }
 
 export async function createCloudList(user: Member, name: string): Promise<string> {

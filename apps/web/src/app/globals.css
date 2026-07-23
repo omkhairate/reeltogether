@@ -1681,9 +1681,9 @@ img {
 .account-sheet .otp-input {
   height: 58px;
   text-align: center;
-  font-size: 25px;
+  font-size: clamp(21px, 6vw, 25px);
   font-weight: 850;
-  letter-spacing: 9px;
+  letter-spacing: clamp(4px, 2vw, 9px);
   font-variant-numeric: tabular-nums;
 }
 .email-sent .text-button { display: block; width: 100%; margin-top: 5px; }

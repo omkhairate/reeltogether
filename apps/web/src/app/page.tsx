@@ -1366,7 +1366,7 @@ function Onboarding({
           <div className={`account-choices ${inviteCode ? "invite-account-choices" : ""}`}>
             <button className="account-create" onClick={() => {
               if (name.trim().length < 2) {
-                onError("Add your name first so we can finish your account after the secure email.");
+                onError("Add your name first so we can finish your account after the email code.");
                 return;
               }
               onCreateAccount({
@@ -3089,24 +3089,24 @@ function AccountSheet({
               <Mail size={27} />
             </span>
             <p>CHECK YOUR EMAIL</p>
-            <h2>Open the email—or use its code.</h2>
+            <h2>Enter your verification code.</h2>
             <small>
-              Sent to <strong>{intent.email}</strong>. Tap the secure button in that email. If it also shows a six-digit code, you can enter it here.
+              Sent to <strong>{intent.email}</strong>. Enter it here to restore the exact shared space, or use the secure button in the email.
             </small>
             <label>
-              Six-digit code (when included)
+              Verification code
               <input
                 className="otp-input"
                 inputMode="numeric"
                 autoComplete="one-time-code"
-                maxLength={6}
+                maxLength={10}
                 value={code}
                 onChange={(event) => setCode(normalizeOtp(event.target.value))}
                 placeholder="000000"
                 autoFocus
               />
             </label>
-            <button className="primary-button" disabled={busy || code.length !== 6} onClick={verify}>
+            <button className="primary-button" disabled={busy || code.length < 6 || code.length > 10} onClick={verify}>
               {busy || authStatus === "restoring" || authStatus === "joining" ? "Restoring your space…" : "Verify and continue"}
             </button>
             <button className="text-button" disabled={busy || secondsLeft > 0} onClick={resend}>
@@ -3118,7 +3118,7 @@ function AccountSheet({
               setCode("");
               setMessage("");
             }}>Use a different email</button>
-            <small className="magic-link-fallback">The secure email button remains the default while Supabase’s built-in mailer is in use.</small>
+            <small className="magic-link-fallback">The secure button in the email works as a fallback too.</small>
             {message && <div className="form-message">{message}</div>}
           </div>
         ) : permanent ? (
@@ -3171,8 +3171,8 @@ function AccountSheet({
               {securing
                 ? "Link an email without losing this list or any of your votes."
                 : mode === "signup"
-                  ? "We’ll send one secure email, then create your shared list exactly once."
-                  : "We’ll email you a secure sign-in—no password needed."}
+                  ? "We’ll send a six-digit email code, then create your shared list exactly once."
+                  : "We’ll email you a six-digit sign-in code—no password needed."}
             </small>
             <label>
               Email address
@@ -3196,7 +3196,7 @@ function AccountSheet({
                   ? "Secure my account"
                   : mode === "signup"
                     ? "Create my account"
-                    : "Send my sign-in email"}
+                    : "Send my sign-in code"}
             </button>
             {conflict && (
               <div className="account-conflict">

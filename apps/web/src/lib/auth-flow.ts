@@ -1,7 +1,8 @@
 export type AuthIssue = "conflict" | "rate-limit" | "expired" | "other";
 
 export function normalizeOtp(value: string) {
-  return value.replace(/\D/g, "").slice(0, 6);
+  // Hosted Supabase projects can configure email OTPs from 6–10 digits.
+  return value.replace(/\D/g, "").slice(0, 10);
 }
 
 export function resendSeconds(sentAt: number, now = Date.now()) {

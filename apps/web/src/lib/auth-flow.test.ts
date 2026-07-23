@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import { classifyAuthIssue, normalizeOtp, resendSeconds } from "./auth-flow";
 
 describe("account verification safeguards", () => {
-  it("normalizes pasted codes without accepting extra digits", () => {
-    expect(normalizeOtp("12 3-4567")).toBe("123456");
+  it("normalizes configured 6–10 digit codes", () => {
+    expect(normalizeOtp("12 3-45678")).toBe("12345678");
+    expect(normalizeOtp("123456789012")).toBe("1234567890");
   });
 
   it("does not allow immediate repeated email sends", () => {

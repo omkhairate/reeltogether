@@ -1366,7 +1366,7 @@ function Onboarding({
           <div className={`account-choices ${inviteCode ? "invite-account-choices" : ""}`}>
             <button className="account-create" onClick={() => {
               if (name.trim().length < 2) {
-                onError("Add your name first so we can finish your account after the email link.");
+                onError("Add your name first so we can finish your account after the secure email.");
                 return;
               }
               onCreateAccount({
@@ -3089,12 +3089,12 @@ function AccountSheet({
               <Mail size={27} />
             </span>
             <p>CHECK YOUR EMAIL</p>
-            <h2>Enter your 6-digit code.</h2>
+            <h2>Open the email—or use its code.</h2>
             <small>
-              Sent to <strong>{intent.email}</strong>. Verifying here keeps you on the same device and restores the exact shared space.
+              Sent to <strong>{intent.email}</strong>. Tap the secure button in that email. If it also shows a six-digit code, you can enter it here.
             </small>
             <label>
-              Verification code
+              Six-digit code (when included)
               <input
                 className="otp-input"
                 inputMode="numeric"
@@ -3118,7 +3118,7 @@ function AccountSheet({
               setCode("");
               setMessage("");
             }}>Use a different email</button>
-            <small className="magic-link-fallback">Your older secure email link still works too.</small>
+            <small className="magic-link-fallback">The secure email button remains the default while Supabase’s built-in mailer is in use.</small>
             {message && <div className="form-message">{message}</div>}
           </div>
         ) : permanent ? (
@@ -3171,8 +3171,8 @@ function AccountSheet({
               {securing
                 ? "Link an email without losing this list or any of your votes."
                 : mode === "signup"
-                  ? "We’ll create your account with a secure email link. When you return, your shared list will open automatically."
-                  : "We’ll email you a secure sign-in link—no password needed."}
+                  ? "We’ll send one secure email, then create your shared list exactly once."
+                  : "We’ll email you a secure sign-in—no password needed."}
             </small>
             <label>
               Email address
@@ -3196,7 +3196,7 @@ function AccountSheet({
                   ? "Secure my account"
                   : mode === "signup"
                     ? "Create my account"
-                    : "Email me a sign-in link"}
+                    : "Send my sign-in email"}
             </button>
             {conflict && (
               <div className="account-conflict">

@@ -30,6 +30,8 @@ img { display: block; }
 .brand.compact { gap: 8px; font-size: 17px; letter-spacing: -.3px; }
 .brand.compact img { width: 29px; height: 29px; border-radius: 8px; }
 .topbar { min-height: 36px; display: flex; align-items: center; justify-content: space-between; }
+.topbar-actions { display: flex; align-items: center; gap: 10px; }
+.quick-install { display: flex; min-height: 30px; align-items: center; gap: 5px; padding: 0 10px; color: var(--purple); border: 1px solid rgba(107,80,198,.16); border-radius: 16px; background: var(--purple-soft); font-size: 10px; font-weight: 800; }
 .sync-status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; font-weight: 650; }
 .sync-status i, .mode-note span { width: 7px; height: 7px; border-radius: 50%; background: #d8a23a; }
 .sync-status.live i, .mode-note.live span { background: var(--teal); }
@@ -146,7 +148,8 @@ img { display: block; }
 .stepper button { display: grid; width: 34px; height: 34px; place-items: center; color: var(--purple); border-radius: 50%; background: var(--purple-soft); font-size: 23px; }
 .stepper strong { font-size: 24px; }
 .stepper span { flex: 1; color: var(--muted); font-size: 12px; }
-.install-card .setting-heading { margin: 0; }
+.install-card .setting-heading { margin: 0 0 13px; }
+.install-card .primary-button { width: 100%; gap: 7px; }
 .text-button { display: block; margin: 23px auto 0; color: var(--muted); font-size: 11px; }
 .text-button.danger { color: var(--coral); }
 
@@ -159,6 +162,7 @@ img { display: block; }
 .onboarding input { width: 100%; height: 51px; margin-top: 6px; padding: 0 14px; color: var(--ink); border: 1px solid var(--line); border-radius: 13px; background: white; font-size: 14px; }
 .primary-button { display: flex; min-height: 49px; align-items: center; justify-content: center; color: white; border-radius: 14px; background: var(--purple); font-size: 13px; font-weight: 800; }
 .onboarding .primary-button { width: 100%; margin-top: 20px; }
+.install-shortcut { display: flex; width: 100%; min-height: 43px; align-items: center; justify-content: center; gap: 7px; margin-top: 10px; color: var(--purple); border: 1px solid rgba(107,80,198,.18); border-radius: 13px; background: var(--purple-soft); font-size: 12px; font-weight: 800; }
 .primary-button:disabled { color: #aaa7ae; background: #e6e3e7; cursor: default; }
 .mode-note { display: flex; align-items: center; justify-content: center; gap: 7px; margin-top: 16px; color: var(--muted); font-size: 10px; }
 .loading-screen { align-content: center; gap: 13px; }
@@ -197,6 +201,17 @@ img { display: block; }
 .detail-sheet ul { display: grid; gap: 9px; margin: 20px 0 0; padding: 0; list-style: none; }
 .detail-sheet li { display: flex; align-items: center; gap: 8px; font-size: 11px; }
 .detail-sheet li svg { color: var(--purple); }
+.install-sheet { padding: 31px 24px calc(24px + env(safe-area-inset-bottom)); text-align: center; }
+.install-sheet > img { width: 76px; height: 76px; margin: 4px auto 16px; border-radius: 18px; box-shadow: 0 9px 24px rgba(42,35,62,.14); }
+.install-sheet > p:first-of-type { margin: 0; color: var(--purple); font-size: 9px; font-weight: 850; letter-spacing: 1.2px; }
+.install-sheet h2 { margin: 6px 0 22px; font-size: 25px; letter-spacing: -.7px; }
+.install-steps { display: grid; gap: 10px; text-align: left; }
+.install-steps > div { display: flex; min-height: 52px; align-items: center; gap: 12px; padding: 10px 13px; border: 1px solid var(--line); border-radius: 14px; background: white; font-size: 12px; }
+.install-steps b { display: grid; flex: 0 0 28px; width: 28px; height: 28px; place-items: center; color: white; border-radius: 50%; background: var(--purple); font-size: 11px; }
+.install-steps span { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.install-steps span strong { display: inline-flex; align-items: center; gap: 4px; }
+.install-note { margin: 16px 5px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.install-sheet > .primary-button { width: 100%; }
 .toast { position: fixed; z-index: 80; right: 20px; bottom: calc(87px + env(safe-area-inset-bottom)); left: 20px; width: max-content; max-width: calc(100% - 40px); margin: auto; padding: 10px 14px; color: white; border-radius: 12px; background: var(--ink); box-shadow: 0 7px 22px rgba(0,0,0,.2); text-align: center; font-size: 11px; animation: toast-in .22s ease-out; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
 .error-banner { position: fixed; z-index: 90; top: calc(12px + env(safe-area-inset-top)); right: 12px; left: 12px; display: flex; max-width: 480px; align-items: center; gap: 10px; margin: auto; padding: 12px 14px; color: #8c3c36; border: 1px solid rgba(190,70,60,.18); border-radius: 13px; background: #fff2f0; box-shadow: var(--shadow); font-size: 11px; }

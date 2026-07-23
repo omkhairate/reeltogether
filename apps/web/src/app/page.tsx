@@ -11,6 +11,7 @@ import {
   Clock3,
   Compass,
   Copy,
+  Download,
   Euro,
   Film,
   House,
@@ -43,6 +44,11 @@ import { defaultFilters, type ActivityItem, type ContentKind, type DiscoveryFilt
 type View = "home" | "discover" | "matches" | "lists";
 type Deck = "watch" | "activities";
 type Item = MediaItem | ActivityItem;
+
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+}
 
 const STORAGE_KEY = "reeltogether.session.v2";
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
@@ -77,6 +83,9 @@ export default function ReelTogetherApp() {
   const [toast, setToast] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [showInstallHelp, setShowInstallHelp] = useState(false);
+  const [isInstalled, setIsInstalled] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const notify = useCallback((message: string) => {
@@ -129,7 +138,38 @@ export default function ReelTogetherApp() {
     if ("serviceWorker" in navigator) {
       void navigator.serviceWorker.register(`${basePath}/sw.js`);
     }
+    const standalone = window.matchMedia("(display-mode: standalone)").matches || Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
+    setIsInstalled(standalone);
+    const capturePrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as BeforeInstallPromptEvent);
+    };
+    const markInstalled = () => {
+      setIsInstalled(true);
+      setInstallPrompt(null);
+      setShowInstallHelp(false);
+    };
+    window.addEventListener("beforeinstallprompt", capturePrompt);
+    window.addEventListener("appinstalled", markInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", capturePrompt);
+      window.removeEventListener("appinstalled", markInstalled);
+    };
   }, []);
+
+  async function installApp() {
+    if (isInstalled) {
+      notify("ReelTogether is already installed");
+      return;
+    }
+    if (installPrompt) {
+      await installPrompt.prompt();
+      const choice = await installPrompt.userChoice;
+      if (choice.outcome === "accepted") setInstallPrompt(null);
+      return;
+    }
+    setShowInstallHelp(true);
+  }
 
   const userVotes = useMemo(() => new Map(session?.votes.filter((vote) => vote.userId === session.user.id).map((vote) => [`${vote.kind}:${vote.itemId}`, vote.decision]) ?? []), [session]);
 
@@ -209,20 +249,21 @@ export default function ReelTogetherApp() {
   }
 
   if (loading) return <LoadingScreen />;
-  if (!session) return <Onboarding onComplete={setSession} onError={setError} />;
+  if (!session) return <><Onboarding onComplete={setSession} onError={setError} onInstall={installApp} isInstalled={isInstalled} />{showInstallHelp && <InstallSheet onClose={() => setShowInstallHelp(false)} />}</>;
 
   const counts = { watch: mediaQueue.length, activities: activityQueue.length };
   return (
     <main className="app-shell">
       <div className="app-content">
-        {view === "home" && <HomeView session={session} matches={matches} remaining={counts.watch + counts.activities} onNavigate={setView} onShare={shareInvite} onDetail={setDetail} cloud={cloudConfigured} />}
+        {view === "home" && <HomeView session={session} matches={matches} remaining={counts.watch + counts.activities} onNavigate={setView} onShare={shareInvite} onInstall={installApp} isInstalled={isInstalled} onDetail={setDetail} cloud={cloudConfigured} />}
         {view === "discover" && <DiscoverView session={session} deck={deck} onDeck={setDeck} mediaQueue={mediaQueue} activityQueue={activityQueue} onVote={castVote} onFilters={() => setShowFilters(true)} onDetail={setDetail} />}
         {view === "matches" && <MatchesView matches={matches} session={session} onDetail={setDetail} />}
-        {view === "lists" && <ListsView session={session} cloud={cloudConfigured} onChange={changeList} onShare={shareInvite} onReset={() => { localStorage.removeItem(STORAGE_KEY); setSession(null); }} />}
+        {view === "lists" && <ListsView session={session} cloud={cloudConfigured} onChange={changeList} onShare={shareInvite} onInstall={installApp} isInstalled={isInstalled} onReset={() => { localStorage.removeItem(STORAGE_KEY); setSession(null); }} />}
       </div>
       <TabBar view={view} matchCount={matches.length} onNavigate={setView} />
       {showFilters && <FiltersSheet filters={session.list.filters} deck={deck} onClose={() => setShowFilters(false)} onSave={(filters) => { void changeList({ ...session.list, filters }); setShowFilters(false); notify("Shared filters updated"); }} />}
       {detail && <DetailSheet item={detail} onClose={() => setDetail(null)} />}
+      {showInstallHelp && <InstallSheet onClose={() => setShowInstallHelp(false)} />}
       {toast && <div className="toast" role="status">{toast}</div>}
       {error && <div className="error-banner" role="alert"><span>{error}</span><button onClick={() => setError("")} aria-label="Dismiss"><X size={17} /></button></div>}
     </main>
@@ -233,7 +274,7 @@ function LoadingScreen() {
   return <main className="loading-screen"><img src={`${basePath}/icons/brand-mark.png`} alt="" /><strong>reeltogether</strong><span className="loader" /></main>;
 }
 
-function Onboarding({ onComplete, onError }: { onComplete: (session: SessionSnapshot) => void; onError: (message: string) => void }) {
+function Onboarding({ onComplete, onError, onInstall, isInstalled }: { onComplete: (session: SessionSnapshot) => void; onError: (message: string) => void; onInstall: () => void; isInstalled: boolean }) {
   const [name, setName] = useState("");
   const [listName, setListName] = useState("Sunday sofa club");
   const [busy, setBusy] = useState(false);
@@ -268,16 +309,17 @@ function Onboarding({ onComplete, onError }: { onComplete: (session: SessionSnap
         <label>Your name<input autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} placeholder="What should your friend see?" /></label>
         {!inviteCode && <label>List name<input value={listName} onChange={(event) => setListName(event.target.value)} /></label>}
         <button className="primary-button" disabled={busy || name.trim().length < 2} onClick={submit}>{busy ? "Getting things ready…" : inviteCode ? "Join shared list" : "Create shared list"}</button>
+        {!isInstalled && <button className="install-shortcut" onClick={onInstall}><Download size={17} /> Install ReelTogether</button>}
         <div className={`mode-note ${cloudConfigured ? "live" : "demo"}`}><span />{cloudConfigured ? "Private syncing is ready" : "Demo mode — connect Supabase before inviting"}</div>
       </section>
     </main>
   );
 }
 
-function HomeView({ session, matches, remaining, onNavigate, onShare, onDetail, cloud }: { session: SessionSnapshot; matches: Item[]; remaining: number; onNavigate: (view: View) => void; onShare: () => void; onDetail: (item: Item) => void; cloud: boolean }) {
+function HomeView({ session, matches, remaining, onNavigate, onShare, onInstall, isInstalled, onDetail, cloud }: { session: SessionSnapshot; matches: Item[]; remaining: number; onNavigate: (view: View) => void; onShare: () => void; onInstall: () => void; isInstalled: boolean; onDetail: (item: Item) => void; cloud: boolean }) {
   const progress = Math.round(((mediaCatalog.length + activityCatalog.length - remaining) / (mediaCatalog.length + activityCatalog.length)) * 100);
   return <div className="page home-page">
-    <header className="topbar"><div className="brand compact"><img src={`${basePath}/icons/brand-mark.png`} alt="" /><strong>reeltogether</strong></div><span className={`sync-status ${cloud ? "live" : ""}`}><i />{cloud ? "Synced" : "Demo"}</span></header>
+    <header className="topbar"><div className="brand compact"><img src={`${basePath}/icons/brand-mark.png`} alt="" /><strong>reeltogether</strong></div><div className="topbar-actions">{!isInstalled && <button className="quick-install" onClick={onInstall}><Download size={15} /> Install</button>}<span className={`sync-status ${cloud ? "live" : ""}`}><i />{cloud ? "Synced" : "Demo"}</span></div></header>
     <section className="greeting"><p>HELLO, {session.user.displayName.toUpperCase()}</p><h1>What should we do next?</h1></section>
     <section className="list-hero"><div className="list-icon"><Compass size={25} /></div><div><span>YOUR ACTIVE LIST</span><h2>{session.list.name}</h2><p><Users size={14} /> {session.members.length} members · {session.list.threshold} picks to match</p></div><button onClick={() => onNavigate("lists")} aria-label="List settings"><ChevronRight size={20} /></button></section>
     <div className="member-strip"><div className="avatars">{session.members.map((member, index) => <span key={member.id} style={{ background: avatarColor(index) }}>{initials(member.displayName)}</span>)}</div><button onClick={onShare}><Send size={15} /> Invite</button></div>
@@ -338,8 +380,13 @@ function MatchesView({ matches, session, onDetail }: { matches: Item[]; session:
   return <div className="page matches-page"><header className="page-title"><p>SHARED PICKS</p><h1>Matches</h1></header><div className="deck-switch"><button className={area === "watch" ? "active" : ""} onClick={() => setArea("watch")}>Watch</button><button className={area === "activities" ? "active" : ""} onClick={() => setArea("activities")}>Bucket list</button></div>{visible.length ? <div className="match-list">{visible.map((item) => { const picks = new Set(session.votes.filter((vote) => vote.itemId === item.id && vote.kind === item.kind && vote.decision === "pick").map((vote) => vote.userId)).size; return <button key={`${item.kind}-${item.id}`} onClick={() => onDetail(item)}><img src={item.image} alt="" /><div><span>{item.kind === "activity" ? "BUCKET LIST" : "MATCH"}</span><h2>{item.title}</h2><p><CheckCircle2 size={14} /> {picks} of {session.members.length} picked</p></div><ChevronRight size={19} /></button>; })}</div> : <div className="large-empty"><Sparkles size={30} /><h2>No matches yet</h2><p>Keep swiping. Shared picks appear here when the list reaches its threshold.</p></div>}</div>;
 }
 
-function ListsView({ session, cloud, onChange, onShare, onReset }: { session: SessionSnapshot; cloud: boolean; onChange: (list: SharedList) => void; onShare: () => void; onReset: () => void }) {
-  return <div className="page lists-page"><header className="page-title"><p>YOUR SPACE</p><h1>{session.list.name}</h1></header><section className="settings-card"><div className="setting-heading"><span><Users size={20} /></span><div><h2>Members</h2><p>{cloud ? "Changes sync for everyone" : "Demo data stays on this device"}</p></div></div>{session.members.map((member, index) => <div className="member-row" key={member.id}><span style={{ background: avatarColor(index) }}>{initials(member.displayName)}</span><div><b>{member.displayName}</b><small>{member.id === session.user.id ? "You" : "Can vote and change filters"}</small></div></div>)}<button className="outline-button" onClick={onShare}><Share2 size={17} /> Invite a friend</button></section><section className="settings-card"><div className="setting-heading"><span><Check size={20} /></span><div><h2>Match threshold</h2><p>How many picks create a match?</p></div></div><div className="stepper"><button onClick={() => onChange({ ...session.list, threshold: Math.max(1, session.list.threshold - 1) })}>−</button><strong>{session.list.threshold}</strong><span>of {session.members.length}</span><button onClick={() => onChange({ ...session.list, threshold: Math.min(Math.max(1, session.members.length), session.list.threshold + 1) })}>+</button></div></section><section className="install-card"><div className="setting-heading"><span><Plus size={20} /></span><div><h2>Add to Home Screen</h2><p>In Safari, tap Share, then “Add to Home Screen.”</p></div></div></section><button className="text-button danger" onClick={onReset}>Leave this device session</button></div>;
+function ListsView({ session, cloud, onChange, onShare, onInstall, isInstalled, onReset }: { session: SessionSnapshot; cloud: boolean; onChange: (list: SharedList) => void; onShare: () => void; onInstall: () => void; isInstalled: boolean; onReset: () => void }) {
+  return <div className="page lists-page"><header className="page-title"><p>YOUR SPACE</p><h1>{session.list.name}</h1></header><section className="settings-card"><div className="setting-heading"><span><Users size={20} /></span><div><h2>Members</h2><p>{cloud ? "Changes sync for everyone" : "Demo data stays on this device"}</p></div></div>{session.members.map((member, index) => <div className="member-row" key={member.id}><span style={{ background: avatarColor(index) }}>{initials(member.displayName)}</span><div><b>{member.displayName}</b><small>{member.id === session.user.id ? "You" : "Can vote and change filters"}</small></div></div>)}<button className="outline-button" onClick={onShare}><Share2 size={17} /> Invite a friend</button></section><section className="settings-card"><div className="setting-heading"><span><Check size={20} /></span><div><h2>Match threshold</h2><p>How many picks create a match?</p></div></div><div className="stepper"><button onClick={() => onChange({ ...session.list, threshold: Math.max(1, session.list.threshold - 1) })}>−</button><strong>{session.list.threshold}</strong><span>of {session.members.length}</span><button onClick={() => onChange({ ...session.list, threshold: Math.min(Math.max(1, session.members.length), session.list.threshold + 1) })}>+</button></div></section>{!isInstalled && <section className="install-card"><div className="setting-heading"><span><Download size={20} /></span><div><h2>Use it like an app</h2><p>Put ReelTogether on this device’s Home Screen.</p></div></div><button className="primary-button" onClick={onInstall}><Download size={17} /> Install app</button></section>}<button className="text-button danger" onClick={onReset}>Leave this device session</button></div>;
+}
+
+function InstallSheet({ onClose }: { onClose: () => void }) {
+  const isIOS = typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent);
+  return <div className="sheet-backdrop" onMouseDown={onClose}><section className="bottom-sheet install-sheet" onMouseDown={(event) => event.stopPropagation()}><button className="sheet-close" onClick={onClose} aria-label="Close"><X size={20} /></button><img src={`${basePath}/icons/apple-touch-icon.png`} alt="ReelTogether app icon" /><p>INSTALL REELTOGETHER</p><h2>{isIOS ? "Add it to your iPhone" : "Add it to your Home Screen"}</h2><div className="install-steps">{isIOS ? <><div><b>1</b><span>Open this page in <strong>Safari</strong></span></div><div><b>2</b><span>Tap <strong>Share <Share2 size={15} /></strong></span></div><div><b>3</b><span>Choose <strong>Add to Home Screen <Plus size={15} /></strong></span></div></> : <><div><b>1</b><span>Open your browser’s menu</span></div><div><b>2</b><span>Choose <strong>Install app <Download size={15} /></strong> or <strong>Add to Home Screen</strong></span></div><div><b>3</b><span>Confirm the installation</span></div></>}</div>{isIOS && <p className="install-note">Apple requires these final taps—the app cannot add itself automatically.</p>}<button className="primary-button" onClick={onClose}>Got it</button></section></div>;
 }
 
 function FiltersSheet({ filters, deck, onClose, onSave }: { filters: DiscoveryFilters; deck: Deck; onClose: () => void; onSave: (filters: DiscoveryFilters) => void }) {

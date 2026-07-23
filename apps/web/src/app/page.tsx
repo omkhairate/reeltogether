@@ -34,6 +34,7 @@ import {
   Star,
   ThumbsUp,
   Trophy,
+  Trash2,
   Users,
   Zap,
   X,
@@ -66,6 +67,7 @@ import {
   defaultFilters,
   type ActivityItem,
   type ContentKind,
+  type CustomCollection,
   type DiscoveryFilters,
   type MediaItem,
   type PairEvent,
@@ -79,6 +81,9 @@ type View = "home" | "discover" | "matches" | "lists";
 type Deck = "watch" | "activities";
 type Item = MediaItem | ActivityItem;
 type PendingSetup = { name: string; listName: string; inviteCode: string };
+type CollectionSelection =
+  | { type: "smart"; kind: ContentKind }
+  | { type: "custom"; id: string };
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -130,6 +135,7 @@ function createLocalSession(
       threshold: 2,
       contentMode: "mixed",
       filters: deviceFilters(),
+      collections: [],
     },
     members: [user, friend],
     votes: [
@@ -177,6 +183,8 @@ export default function ReelTogetherApp() {
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [showPairWelcome, setShowPairWelcome] = useState(false);
   const [accountReturn, setAccountReturn] = useState<{ listId: string; listName: string } | null>(null);
+  const [collectionSelection, setCollectionSelection] = useState<CollectionSelection | null>(null);
+  const [collectionEditor, setCollectionEditor] = useState<CustomCollection | "new" | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
@@ -220,6 +228,7 @@ export default function ReelTogetherApp() {
           parsed = JSON.parse(saved) as SessionSnapshot;
           if (!parsed.events) parsed.events = [];
           if (!parsed.savedItems) parsed.savedItems = [];
+          if (!parsed.list.collections) parsed.list.collections = [];
         } catch {
           localStorage.removeItem(STORAGE_KEY);
         }
@@ -798,6 +807,7 @@ export default function ReelTogetherApp() {
         {view === "lists" && (
           <ListsView
             session={session}
+            matches={matches}
             identity={identity}
             cloud={cloudConfigured}
             onShare={shareInvite}
@@ -816,6 +826,8 @@ export default function ReelTogetherApp() {
             }}
             notificationsEnabled={notificationsEnabled}
             onEnableNotifications={() => void enableNotifications()}
+            onOpenCollection={setCollectionSelection}
+            onNewCollection={() => setCollectionEditor("new")}
           />
         )}
       </div>
@@ -884,6 +896,53 @@ export default function ReelTogetherApp() {
             setIdentity(null);
             setSession(null);
             setShowAccount(false);
+          }}
+        />
+      )}
+      {collectionSelection && (
+        <CollectionDetailSheet
+          selection={collectionSelection}
+          collections={session.list.collections}
+          matches={matches}
+          events={session.events}
+          onClose={() => setCollectionSelection(null)}
+          onEdit={(collection) => {
+            setCollectionSelection(null);
+            setCollectionEditor(collection);
+          }}
+          onDetail={(item) => {
+            setCollectionSelection(null);
+            setDetail(item);
+          }}
+        />
+      )}
+      {collectionEditor && (
+        <CollectionEditorSheet
+          initial={collectionEditor === "new" ? null : collectionEditor}
+          matches={matches}
+          onClose={() => setCollectionEditor(null)}
+          onSave={(draft) => {
+            const next: CustomCollection = {
+              id: draft.id || crypto.randomUUID(),
+              name: draft.name.trim().slice(0, 50),
+              deadline: draft.deadline,
+              itemKeys: draft.itemKeys,
+              createdBy: draft.createdBy || session.user.id,
+            };
+            const collections = session.list.collections.some((collection) => collection.id === next.id)
+              ? session.list.collections.map((collection) => collection.id === next.id ? next : collection)
+              : [...session.list.collections, next];
+            void changeList({ ...session.list, collections });
+            setCollectionEditor(null);
+            notify(collectionEditor === "new" ? "Shared sublist created" : "Shared sublist updated");
+          }}
+          onDelete={collectionEditor === "new" ? undefined : () => {
+            void changeList({
+              ...session.list,
+              collections: session.list.collections.filter((collection) => collection.id !== collectionEditor.id),
+            });
+            setCollectionEditor(null);
+            notify("Sublist removed");
           }}
         />
       )}
@@ -1984,6 +2043,7 @@ function MatchesView({
 
 function ListsView({
   session,
+  matches,
   identity,
   cloud,
   onShare,
@@ -1993,8 +2053,11 @@ function ListsView({
   onReset,
   notificationsEnabled,
   onEnableNotifications,
+  onOpenCollection,
+  onNewCollection,
 }: {
   session: SessionSnapshot;
+  matches: Item[];
   identity: CloudIdentity | null;
   cloud: boolean;
   onShare: () => void;
@@ -2004,7 +2067,19 @@ function ListsView({
   onReset: () => void;
   notificationsEnabled: boolean;
   onEnableNotifications: () => void;
+  onOpenCollection: (selection: CollectionSelection) => void;
+  onNewCollection: () => void;
 }) {
+  const smartCollections: Array<{
+    kind: ContentKind;
+    title: string;
+    subtitle: string;
+    icon: React.ReactNode;
+  }> = [
+    { kind: "movie", title: "Movies", subtitle: "Films you both picked", icon: <Film size={20} /> },
+    { kind: "show", title: "TV Shows", subtitle: "Series to start together", icon: <MonitorPlay size={20} /> },
+    { kind: "activity", title: "Activities", subtitle: "Things to go and do", icon: <Compass size={20} /> },
+  ];
   return (
     <div className="page lists-page">
       <header className="page-title">
@@ -2035,6 +2110,56 @@ function ListsView({
           </button>
         </section>
       )}
+      <section className="collection-section">
+        <div className="collection-heading">
+          <div>
+            <p>SHARED SUBLISTS</p>
+            <h2>Keep the good ideas organized</h2>
+          </div>
+          <button onClick={onNewCollection}><Plus size={16} /> New</button>
+        </div>
+        <div className="smart-collection-grid">
+          {smartCollections.map((collection) => {
+            const count = matches.filter((item) => item.kind === collection.kind).length;
+            return (
+              <button
+                key={collection.kind}
+                className={`smart-collection ${collection.kind}`}
+                onClick={() => onOpenCollection({ type: "smart", kind: collection.kind })}
+              >
+                <span>{collection.icon}</span>
+                <div><b>{collection.title}</b><small>{collection.subtitle}</small></div>
+                <strong>{count}</strong>
+                <ChevronRight size={16} />
+              </button>
+            );
+          })}
+        </div>
+        {session.list.collections.length > 0 ? (
+          <div className="custom-collection-list">
+            {session.list.collections.map((collection) => {
+              const items = matches.filter((item) => collection.itemKeys.includes(itemKey(item)));
+              const completed = items.filter((item) => isCompletedItem(item, session.events)).length;
+              return (
+                <button key={collection.id} onClick={() => onOpenCollection({ type: "custom", id: collection.id })}>
+                  <span><Bookmark size={18} /></span>
+                  <div>
+                    <b>{collection.name}</b>
+                    <small>{collection.deadline ? `By ${formatDeadline(collection.deadline)}` : "No deadline"} · {completed}/{items.length} done</small>
+                  </div>
+                  <ChevronRight size={17} />
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <button className="collection-empty" onClick={onNewCollection}>
+            <Sparkles size={18} />
+            <span><b>Make a list for a shared goal</b><small>“Before December”, “Rainy weekends”, or anything that feels like you two.</small></span>
+            <ChevronRight size={17} />
+          </button>
+        )}
+      </section>
       <section className="settings-card">
         <div className="setting-heading">
           <span>
@@ -2440,6 +2565,122 @@ function MatchCelebration({
         <button className="text-button" onClick={onClose}>
           Keep swiping
         </button>
+      </section>
+    </div>
+  );
+}
+
+function CollectionDetailSheet({
+  selection,
+  collections,
+  matches,
+  events,
+  onClose,
+  onEdit,
+  onDetail,
+}: {
+  selection: CollectionSelection;
+  collections: CustomCollection[];
+  matches: Item[];
+  events: PairEvent[];
+  onClose: () => void;
+  onEdit: (collection: CustomCollection) => void;
+  onDetail: (item: Item) => void;
+}) {
+  const custom = selection.type === "custom"
+    ? collections.find((collection) => collection.id === selection.id)
+    : undefined;
+  const title = custom?.name ?? (selection.type === "smart"
+    ? selection.kind === "movie" ? "Movies" : selection.kind === "show" ? "TV Shows" : "Activities"
+    : "Shared sublist");
+  const items = custom
+    ? matches.filter((item) => custom.itemKeys.includes(itemKey(item)))
+    : selection.type === "smart"
+      ? matches.filter((item) => item.kind === selection.kind)
+      : [];
+  const completed = items.filter((item) => isCompletedItem(item, events)).length;
+  return (
+    <div className="sheet-backdrop" onMouseDown={onClose}>
+      <section className="bottom-sheet collection-detail-sheet" onMouseDown={(event) => event.stopPropagation()}>
+        <button className="sheet-close" onClick={onClose} aria-label="Close"><X size={20} /></button>
+        <div className="collection-sheet-icon"><Bookmark size={22} /></div>
+        <p>{custom ? "CUSTOM SUBLIST" : "AUTOMATIC SUBLIST"}</p>
+        <h2>{title}</h2>
+        <div className="collection-summary">
+          <span>{items.length} saved</span><i />
+          <span>{completed} done</span>
+          {custom?.deadline && <><i /><span><CalendarDays size={12} /> {formatDeadline(custom.deadline)}</span></>}
+        </div>
+        {items.length ? (
+          <div className="collection-items">
+            {items.map((item) => (
+              <button key={itemKey(item)} onClick={() => onDetail(item)}>
+                <img src={item.image} alt="" onError={imageFallback} />
+                <div><b>{item.title}</b><small>{item.kind === "activity" ? `${item.category} · ${item.budget}` : item.kind === "movie" ? "Movie" : "TV Show"}</small></div>
+                {isCompletedItem(item, events) ? <CheckCircle2 size={18} className="done" /> : <ChevronRight size={18} />}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="collection-detail-empty"><Sparkles size={23} /><b>Nothing here yet</b><span>{custom ? "Edit this sublist to add some of your matches." : "Your shared matches will sort themselves here automatically."}</span></div>
+        )}
+        {custom && <button className="outline-button collection-edit" onClick={() => onEdit(custom)}><ListFilter size={16} /> Edit sublist</button>}
+      </section>
+    </div>
+  );
+}
+
+function CollectionEditorSheet({
+  initial,
+  matches,
+  onClose,
+  onSave,
+  onDelete,
+}: {
+  initial: CustomCollection | null;
+  matches: Item[];
+  onClose: () => void;
+  onSave: (collection: CustomCollection) => void;
+  onDelete?: (() => void) | undefined;
+}) {
+  const [name, setName] = useState(initial?.name ?? "");
+  const [deadline, setDeadline] = useState(initial?.deadline ?? "");
+  const [itemKeys, setItemKeys] = useState<string[]>(initial?.itemKeys ?? []);
+  function toggle(item: Item) {
+    const key = itemKey(item);
+    setItemKeys((current) => current.includes(key) ? current.filter((value) => value !== key) : [...current, key]);
+  }
+  return (
+    <div className="sheet-backdrop" onMouseDown={onClose}>
+      <section className="bottom-sheet collection-editor-sheet" onMouseDown={(event) => event.stopPropagation()}>
+        <button className="sheet-close" onClick={onClose} aria-label="Close"><X size={20} /></button>
+        <p>{initial ? "EDIT SHARED SUBLIST" : "NEW SHARED SUBLIST"}</p>
+        <h2>{initial ? "Shape this list together." : "Give an idea a little home."}</h2>
+        <label>List name<input value={name} maxLength={50} onChange={(event) => setName(event.target.value)} placeholder="Before December" autoFocus /></label>
+        <label>Optional deadline<input type="date" value={deadline} onInput={(event) => setDeadline(event.currentTarget.value)} /></label>
+        <div className="collection-picker-heading"><div><b>Add your matches</b><small>Both of you will see these changes.</small></div><span>{itemKeys.length} selected</span></div>
+        {matches.length ? (
+          <div className="collection-picker">
+            {matches.map((item) => {
+              const selected = itemKeys.includes(itemKey(item));
+              return (
+                <button key={itemKey(item)} className={selected ? "selected" : ""} onClick={() => toggle(item)}>
+                  <img src={item.image} alt="" onError={imageFallback} />
+                  <div><b>{item.title}</b><small>{item.kind === "activity" ? "Activity" : item.kind === "movie" ? "Movie" : "TV Show"}</small></div>
+                  <i>{selected && <Check size={14} />}</i>
+                </button>
+              );
+            })}
+          </div>
+        ) : <div className="collection-picker-empty">Your first shared match can be added here.</div>}
+        <button className="primary-button" disabled={name.trim().length < 2} onClick={() => onSave({
+          id: initial?.id ?? "",
+          name,
+          deadline,
+          itemKeys,
+          createdBy: initial?.createdBy ?? "",
+        })}>{initial ? "Save changes" : "Create shared sublist"}</button>
+        {onDelete && <button className="text-button danger collection-delete" onClick={onDelete}><Trash2 size={14} /> Delete sublist</button>}
       </section>
     </div>
   );
@@ -3060,6 +3301,22 @@ function initials(name: string) {
     .map((part) => part[0])
     .join("")
     .toUpperCase();
+}
+function itemKey(item: Item) {
+  return `${item.kind}:${item.id}`;
+}
+function isCompletedItem(item: Item, events: PairEvent[]) {
+  return events.some(
+    (event) =>
+      event.type === "complete" &&
+      event.itemId === item.id &&
+      event.kind === item.kind,
+  );
+}
+function formatDeadline(value: string) {
+  const date = new Date(`${value}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", year: "numeric" }).format(date);
 }
 function avatarColor(index: number) {
   return ["#6b50c6", "#38a7a3", "#e79439", "#ec7c72"][index % 4];

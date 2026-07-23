@@ -54,6 +54,14 @@ export type DiscoveryFilters = {
   hideCompleted: boolean;
 };
 
+export type CustomCollection = {
+  id: string;
+  name: string;
+  deadline: string;
+  itemKeys: string[];
+  createdBy: string;
+};
+
 export type SharedList = {
   id: string;
   inviteCode: string;
@@ -61,6 +69,7 @@ export type SharedList = {
   threshold: number;
   contentMode: ContentMode;
   filters: DiscoveryFilters;
+  collections: CustomCollection[];
 };
 
 export type Member = { id: string; displayName: string };

@@ -6,6 +6,7 @@ import {
 import {
   defaultFilters,
   type ContentMode,
+  type CustomCollection,
   type DiscoveryFilters,
   type Member,
   type MediaItem,
@@ -37,6 +38,9 @@ function requireCloud() {
 }
 
 function listFromRow(row: Record<string, unknown>): SharedList {
+  const stored = (row.filters as Partial<DiscoveryFilters> & {
+    collections?: CustomCollection[];
+  }) ?? {};
   return {
     id: String(row.id),
     inviteCode: String(row.invite_code),
@@ -45,8 +49,15 @@ function listFromRow(row: Record<string, unknown>): SharedList {
     contentMode: row.content_mode as ContentMode,
     filters: {
       ...defaultFilters,
-      ...((row.filters as Partial<DiscoveryFilters>) ?? {}),
+      ...stored,
     },
+    collections: Array.isArray(stored.collections)
+      ? stored.collections.filter(
+          (collection) =>
+            Boolean(collection?.id && collection?.name) &&
+            Array.isArray(collection.itemKeys),
+        )
+      : [],
   };
 }
 
@@ -389,7 +400,7 @@ export async function updateCloudList(list: SharedList) {
       name: list.name,
       threshold: list.threshold,
       content_mode: list.contentMode,
-      filters: list.filters,
+      filters: { ...list.filters, collections: list.collections },
     })
     .eq("id", list.id);
   if (error) throw error;

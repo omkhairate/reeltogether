@@ -2720,7 +2720,7 @@ function PersonalizeSheet({ session, onSave, onClose }: {
       <section className="bottom-sheet personalize-sheet" onMouseDown={(event) => event.stopPropagation()}>
         <button className="sheet-close" onClick={onClose}><X size={20} /></button>
         <p>MAKE IT YOURS</p><h2>Your shared-space personality.</h2>
-        <h3>Colour mood</h3><div className="theme-picker">{[["violet","Violet"],["ocean","Ocean"],["sunset","Sunset"],["forest","Forest"]].map(([id,label]) => <button key={id} className={`${id} ${theme === id ? "selected" : ""}`} onClick={() => setTheme(id)}><i />{label}{theme === id && <Check size={13} />}</button>)}</div>
+        <h3>Colour mood</h3><div className="theme-picker">{([['violet', 'Violet'], ['ocean', 'Ocean'], ['sunset', 'Sunset'], ['forest', 'Forest']] as const).map(([id,label]) => <button key={id} className={`${id} ${theme === id ? "selected" : ""}`} onClick={() => setTheme(id)}><i />{label}{theme === id && <Check size={13} />}</button>)}</div>
         <h3>Your streaming services</h3><small>When both people add theirs, discovery quietly prioritizes services you share.</small>
         <div className="service-picker">{options.map((provider) => <button key={provider} className={providers.includes(provider) ? "selected" : ""} onClick={() => toggle(provider)}>{providers.includes(provider) && <Check size={12} />}{provider}</button>)}</div>
         <button className="primary-button" onClick={() => onSave(theme, providers)}>Save my side</button>

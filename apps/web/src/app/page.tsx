@@ -6,6 +6,7 @@ import {
   BarChart3,
   Bell,
   CalendarDays,
+  Camera,
   Check,
   CheckCircle2,
   ChevronRight,
@@ -17,14 +18,18 @@ import {
   Euro,
   EyeOff,
   Film,
+  Gift,
   Globe2,
   House,
+  Heart,
   Info,
   ListFilter,
+  Link2,
   LogOut,
   Mail,
   MapPin,
   MonitorPlay,
+  Palette,
   Plus,
   RotateCcw,
   Send,
@@ -34,6 +39,7 @@ import {
   Star,
   ThumbsUp,
   Trophy,
+  Crown,
   Trash2,
   Users,
   Zap,
@@ -82,6 +88,7 @@ import {
   type MediaItem,
   type PairEvent,
   type PairEventType,
+  type ReactionType,
   type SessionSnapshot,
   type SharedList,
   type VoteDecision,
@@ -202,6 +209,10 @@ export default function ReelTogetherApp() {
   const [catalogHasMore, setCatalogHasMore] = useState(true);
   const [catalogNotice, setCatalogNotice] = useState("");
   const [showAddActivity, setShowAddActivity] = useState(false);
+  const [showAddIdea, setShowAddIdea] = useState(false);
+  const [showTaste, setShowTaste] = useState(false);
+  const [showChallenge, setShowChallenge] = useState(false);
+  const [showPersonalize, setShowPersonalize] = useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [showPairWelcome, setShowPairWelcome] = useState(false);
   const [accountReturn, setAccountReturn] = useState<{ listId: string; listName: string } | null>(null);
@@ -529,6 +540,7 @@ export default function ReelTogetherApp() {
       if (cloudConfigured) await saveCloudCustomActivity(session.list.id, session.user.id, item);
       setSession((current) => current ? { ...current, savedItems: dedupeItems([...current.savedItems, item]) } : current);
       setShowAddActivity(false);
+      setShowAddIdea(false);
       notify("Activity added for both of you");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not add the activity.");
@@ -573,6 +585,17 @@ export default function ReelTogetherApp() {
     () => new Set(session?.events.filter((event) => event.type === "complete").map((event) => `${event.kind}:${event.itemId}`) ?? []),
     [session?.events],
   );
+  const sharedServices = useMemo(() => {
+    if (!session) return [] as string[];
+    const profiles = session.members
+      .map((member) => latestEvent(session.events, "services", member.id))
+      .filter((event): event is PairEvent => Boolean(event))
+      .map((event) => String(event.payload.providers ?? "").split("|").filter(Boolean));
+    if (profiles.length < 2) return [];
+    const first = profiles[0];
+    if (!first) return [];
+    return first.filter((provider) => profiles.every((set) => set.includes(provider)));
+  }, [session]);
 
   const filteredMedia = useMemo(() => {
     if (!session) return [];
@@ -587,9 +610,10 @@ export default function ReelTogetherApp() {
           filters.providers.some((provider) =>
             item.providers.includes(provider),
           )) &&
-        (!filters.mediaKinds.length || filters.mediaKinds.includes(item.kind)),
+        (!filters.mediaKinds.length || filters.mediaKinds.includes(item.kind)) &&
+        (!sharedServices.length || sharedServices.some((provider) => item.providers.includes(provider))),
     );
-  }, [session, mediaItems]);
+  }, [session, mediaItems, sharedServices]);
 
   const filteredActivities = useMemo(() => {
     if (!session) return [];
@@ -714,6 +738,43 @@ export default function ReelTogetherApp() {
         );
       }
     }
+  }
+
+  async function reactToItem(item: Item, reaction: ReactionType) {
+    if (!session) return;
+    if (reaction === "golden") {
+      const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      const used = session.events.some(
+        (event) =>
+          event.type === "reaction" &&
+          event.userId === session.user.id &&
+          event.payload.reaction === "golden" &&
+          new Date(event.updatedAt).getTime() > weekAgo,
+      );
+      if (used) {
+        notify("Your next Golden Pick unlocks seven days after the last one");
+        return;
+      }
+    }
+    void addPairEvent("reaction", item, { reaction });
+    if (reaction === "already") {
+      void addPairEvent("complete", item, { source: "already" });
+      await castVote(item, "pass");
+      notify("Added to your shared history");
+      return;
+    }
+    await castVote(
+      item,
+      reaction === "not-tonight" ? "pass" : "pick",
+    );
+    const copy: Record<ReactionType, string> = {
+      absolutely: "Absolutely — that one felt right",
+      maybe: "Saved as maybe-with-you",
+      "not-tonight": "Not tonight — passed for this list",
+      already: "Added to history",
+      golden: "Golden Pick used — excellent commitment",
+    };
+    notify(copy[reaction]);
   }
 
   async function addPairEvent(
@@ -872,8 +933,11 @@ export default function ReelTogetherApp() {
     );
 
   const counts = { watch: mediaQueue.length, activities: activityQueue.length };
+  const activeTheme = [...session.events]
+    .filter((event) => event.type === "theme")
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]?.payload.theme ?? "violet";
   return (
-    <main className="app-shell">
+    <main className={`app-shell theme-${String(activeTheme)}`}>
       <div className="app-content">
         {view === "home" && (
           <HomeView
@@ -890,6 +954,9 @@ export default function ReelTogetherApp() {
             isInstalled={isInstalled}
             onDetail={setDetail}
             cloud={cloudConfigured}
+            onTaste={() => setShowTaste(true)}
+            onChallenge={() => setShowChallenge(true)}
+            onIdea={() => setShowAddIdea(true)}
           />
         )}
         {view === "discover" && (
@@ -907,6 +974,8 @@ export default function ReelTogetherApp() {
             hasMore={catalogHasMore}
             catalogNotice={catalogNotice}
             onAddActivity={() => setShowAddActivity(true)}
+            onAddIdea={() => setShowAddIdea(true)}
+            onReact={reactToItem}
           />
         )}
         {view === "matches" && (
@@ -963,6 +1032,7 @@ export default function ReelTogetherApp() {
                   setError(reason instanceof Error ? reason.message : "Could not switch lists.");
                 });
             }}
+            onPersonalize={() => setShowPersonalize(true)}
           />
         )}
       </div>
@@ -1093,6 +1163,42 @@ export default function ReelTogetherApp() {
           }}
         />
       )}
+      {showTaste && (
+        <TasteProfileSheet
+          session={session}
+          matches={matches}
+          onClose={() => setShowTaste(false)}
+        />
+      )}
+      {showChallenge && (
+        <ChallengeSheet
+          session={session}
+          onSave={(payload) => {
+            void addPairEvent("challenge", null, payload);
+            setShowChallenge(false);
+            notify("Challenge added to your shared space");
+          }}
+          onClose={() => setShowChallenge(false)}
+        />
+      )}
+      {showPersonalize && (
+        <PersonalizeSheet
+          session={session}
+          onSave={(theme, providers) => {
+            void addPairEvent("theme", null, { theme });
+            void addPairEvent("services", null, { providers: providers.join("|") });
+            setShowPersonalize(false);
+            notify("Your shared space feels more like you now");
+          }}
+          onClose={() => setShowPersonalize(false)}
+        />
+      )}
+      {showAddIdea && (
+        <AddIdeaSheet
+          onSave={(item) => void addCustomActivity(item)}
+          onClose={() => setShowAddIdea(false)}
+        />
+      )}
       {showTonight && (
         <TonightSheet
           session={session}
@@ -1107,7 +1213,12 @@ export default function ReelTogetherApp() {
       {showRoulette && (
         <RouletteSheet
           matches={matches}
+          session={session}
           onClose={() => setShowRoulette(false)}
+          onNominate={(item) => {
+            void addPairEvent("nomination", item, { nominated: true });
+            notify("Your secret nomination is in");
+          }}
           onPlan={(item) => {
             setShowRoulette(false);
             setPlanItem(item);
@@ -1128,9 +1239,10 @@ export default function ReelTogetherApp() {
       {rateItem && (
         <RatingSheet
           item={rateItem}
-          onSave={(rating) => {
-            void addPairEvent("complete", rateItem, {});
-            void addPairEvent("rating", rateItem, { rating });
+          onSave={(payload) => {
+            void addPairEvent("complete", rateItem, { happenedAt: payload.happenedAt });
+            void addPairEvent("rating", rateItem, { rating: payload.rating });
+            void addPairEvent("memory", rateItem, payload);
             setRateItem(null);
             notify("Saved to your history");
           }}
@@ -1472,6 +1584,9 @@ function HomeView({
   isInstalled,
   onDetail,
   cloud,
+  onTaste,
+  onChallenge,
+  onIdea,
 }: {
   session: SessionSnapshot;
   matches: Item[];
@@ -1486,6 +1601,9 @@ function HomeView({
   isInstalled: boolean;
   onDetail: (item: Item) => void;
   cloud: boolean;
+  onTaste: () => void;
+  onChallenge: () => void;
+  onIdea: () => void;
 }) {
   const progress = Math.round(
     ((total - remaining) /
@@ -1523,6 +1641,19 @@ function HomeView({
   const tonightCopy = myTonight && theirTonight
     ? `${myTonight.payload.mood === theirTonight.payload.mood ? `Both ${myTonight.payload.mood}` : `${myTonight.payload.mood} ↔ ${theirTonight.payload.mood}`} · ${myTonight.payload.time === theirTonight.payload.time ? myTonight.payload.time : "meet in the middle"}`
     : myTonight ? `Waiting for ${partner?.displayName ?? "your person"}` : theirTonight ? `${partner?.displayName} is ready—add your vibe` : "Find your overlap in 20 seconds";
+  const activeChallenge = [...session.events]
+    .filter((event) => event.type === "challenge")
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+  const bothVoted = catalog.filter((item) =>
+    session.members.every((member) => session.votes.some((vote) => vote.userId === member.id && vote.itemId === item.id && vote.kind === item.kind)),
+  );
+  const alignedVotes = bothVoted.filter((item) => {
+    const decisions = session.votes.filter((vote) => vote.itemId === item.id && vote.kind === item.kind).map((vote) => vote.decision);
+    return new Set(decisions).size === 1;
+  }).length;
+  const tasteScore = bothVoted.length ? Math.round((alignedVotes / bothVoted.length) * 100) : 0;
+  const monthKey = new Date().toISOString().slice(0, 7);
+  const monthMemories = session.events.filter((event) => event.type === "complete" && event.updatedAt.startsWith(monthKey)).length;
   return (
     <div className="page home-page">
       <header className="topbar">
@@ -1617,6 +1748,23 @@ function HomeView({
           </span>
         </button>
       </div>
+      <div className="experience-grid">
+        <button className="taste-tile" onClick={onTaste}>
+          <BarChart3 size={19} />
+          <span><b>Pair Taste</b><small>{tasteScore ? `${tasteScore}% in sync` : "Still taking shape"}</small></span>
+          <ChevronRight size={16} />
+        </button>
+        <button className="challenge-tile" onClick={onChallenge}>
+          <Gift size={19} />
+          <span><b>{activeChallenge ? String(activeChallenge.payload.title) : "Pair challenge"}</b><small>{activeChallenge ? "Your current adventure" : "Try something new"}</small></span>
+          <ChevronRight size={16} />
+        </button>
+        <button className="idea-tile" onClick={onIdea}>
+          <Link2 size={19} />
+          <span><b>Drop an idea</b><small>Link, place, or passing thought</small></span>
+          <Plus size={16} />
+        </button>
+      </div>
       <section className="progress-card duo-progress">
         <div>
           <span>YOUR TURN</span>
@@ -1682,6 +1830,10 @@ function HomeView({
           </small>
         </div>
       </section>
+      <section className="monthly-recap">
+        <div><Sparkles size={18} /><span><small>THIS MONTH TOGETHER</small><b>{monthMemories ? `${monthMemories} memories made` : "Your next memory starts with one pick"}</b></span></div>
+        <p>{matches.length} shared choices · {favoriteGenre ? `${favoriteGenre} is winning` : "taste still unfolding"} · {tasteScore || 0}% decision alignment</p>
+      </section>
     </div>
   );
 }
@@ -1700,6 +1852,8 @@ function DiscoverView({
   hasMore,
   catalogNotice,
   onAddActivity,
+  onAddIdea,
+  onReact,
 }: {
   session: SessionSnapshot;
   deck: Deck;
@@ -1714,6 +1868,8 @@ function DiscoverView({
   hasMore: boolean;
   catalogNotice: string;
   onAddActivity: () => void;
+  onAddIdea: () => void;
+  onReact: (item: Item, reaction: ReactionType) => void;
 }) {
   const canSwitch = session.list.contentMode === "mixed";
   const effectiveDeck =
@@ -1750,6 +1906,7 @@ function DiscoverView({
           </p>
         </div>
         <div className="discover-actions">
+          <button onClick={onAddIdea} aria-label="Drop an idea"><Link2 size={19} /></button>
           {effectiveDeck === "activities" && (
             <button onClick={onAddActivity} aria-label="Add an activity"><Plus size={20} /></button>
           )}
@@ -1764,6 +1921,7 @@ function DiscoverView({
           key={`${item.kind}-${item.id}`}
           item={item}
           onVote={onVote}
+          onReact={onReact}
           onDetail={onDetail}
         />
       ) : (
@@ -1791,10 +1949,12 @@ function DiscoverView({
 function SwipeDeck({
   item,
   onVote,
+  onReact,
   onDetail,
 }: {
   item: Item;
   onVote: (item: Item, decision: VoteDecision) => void;
+  onReact: (item: Item, reaction: ReactionType) => void;
   onDetail: (item: Item) => void;
 }) {
   const [drag, setDrag] = useState(0);
@@ -1845,6 +2005,13 @@ function SwipeDeck({
           </div>
         </article>
       </section>
+      <div className="reaction-strip" aria-label="More ways to react">
+        <button onClick={() => onReact(item, "absolutely")}><Heart size={14} /> Absolutely</button>
+        <button onClick={() => onReact(item, "maybe")}><Sparkles size={14} /> Maybe with you</button>
+        <button onClick={() => onReact(item, "not-tonight")}><Clock3 size={14} /> Not tonight</button>
+        <button onClick={() => onReact(item, "already")}><CheckCircle2 size={14} /> Already {item.kind === "activity" ? "done" : "watched"}</button>
+        <button className="golden" onClick={() => onReact(item, "golden")}><Crown size={14} /> Golden Pick</button>
+      </div>
       <div className="swipe-actions">
         <button
           className="pass"
@@ -2108,6 +2275,13 @@ function MatchesView({
                       Confirm
                     </button>
                   )}
+                  <button
+                    className="calendar-export"
+                    onClick={() => downloadCalendar(item, String(event.payload.when ?? ""), String(event.payload.location ?? ""))}
+                    aria-label={`Add ${item.title} to calendar`}
+                  >
+                    <CalendarDays size={13} /> Calendar
+                  </button>
                 </div>
               );
             })}
@@ -2181,15 +2355,20 @@ function MatchesView({
                   event.itemId === item.id &&
                   event.kind === item.kind,
               );
+              const memory = session.events.find(
+                (event) => event.type === "memory" && event.itemId === item.id && event.kind === item.kind,
+              );
               return (
                 <button
                   key={`${item.kind}-${item.id}`}
                   onClick={() => onDetail(item)}
                 >
-                  <img src={item.image} alt="" onError={imageFallback} />
+                  <img src={String(memory?.payload.photo || item.image)} alt="" onError={imageFallback} />
                   <b>{item.title}</b>
                   <small>
-                    {ratings.length >= 2
+                    {memory?.payload.note
+                      ? `“${String(memory.payload.note)}”`
+                      : ratings.length >= 2
                       ? `★ ${averageRating(ratings)} together`
                       : "Rating stays private until both finish"}
                   </small>
@@ -2219,6 +2398,7 @@ function ListsView({
   onNewCollection,
   availableLists,
   onSwitchList,
+  onPersonalize,
 }: {
   session: SessionSnapshot;
   matches: Item[];
@@ -2235,6 +2415,7 @@ function ListsView({
   onNewCollection: () => void;
   availableLists: CloudListSummary[];
   onSwitchList: (listId: string) => void;
+  onPersonalize: () => void;
 }) {
   const smartCollections: Array<{
     kind: ContentKind;
@@ -2296,6 +2477,11 @@ function ListsView({
           </div>
         </section>
       )}
+      <button className="personalize-card" onClick={onPersonalize}>
+        <span><Palette size={20} /></span>
+        <div><b>Make this space yours</b><small>Theme, streaming services, and pair personality</small></div>
+        <ChevronRight size={18} />
+      </button>
       <section className="collection-section">
         <div className="collection-heading">
           <div>
@@ -2447,6 +2633,126 @@ function ListsView({
   );
 }
 
+function TasteProfileSheet({
+  session,
+  matches,
+  onClose,
+}: {
+  session: SessionSnapshot;
+  matches: Item[];
+  onClose: () => void;
+}) {
+  const partner = session.members.find((member) => member.id !== session.user.id);
+  const comparable = new Map<string, VoteDecision[]>();
+  session.votes.forEach((vote) => {
+    const key = `${vote.kind}:${vote.itemId}`;
+    comparable.set(key, [...(comparable.get(key) ?? []), vote.decision]);
+  });
+  const compared = [...comparable.values()].filter((values) => values.length >= 2);
+  const alignment = compared.length
+    ? Math.round((compared.filter((values) => new Set(values).size === 1).length / compared.length) * 100)
+    : 0;
+  const media = matches.filter((item): item is MediaItem => item.kind !== "activity");
+  const activities = matches.filter((item): item is ActivityItem => item.kind === "activity");
+  const genres = topCounts(media.flatMap((item) => item.genres), 3);
+  const vibes = topCounts(activities.flatMap((item) => item.vibes), 3);
+  const adventurous = Math.min(100, 35 + activities.length * 8 + new Set(media.map((item) => item.language)).size * 7);
+  return (
+    <div className="sheet-backdrop" onMouseDown={onClose}>
+      <section className="bottom-sheet taste-sheet" onMouseDown={(event) => event.stopPropagation()}>
+        <button className="sheet-close" onClick={onClose}><X size={20} /></button>
+        <p>YOUR PAIR TASTE</p>
+        <h2>{session.user.displayName} + {partner?.displayName ?? "your person"}</h2>
+        <div className="taste-score"><strong>{alignment || "—"}{alignment ? "%" : ""}</strong><span><b>decision alignment</b><small>Agreement is lovely; surprising differences make the queue interesting.</small></span></div>
+        <div className="taste-spectrum"><span>Comfort</span><i><b style={{ width: `${adventurous}%` }} /></i><span>Adventure</span></div>
+        <div className="taste-columns">
+          <div><small>STRONGEST OVERLAPS</small>{genres.length ? genres.map(([label, count]) => <span key={label}><b>{label}</b><i>{count}</i></span>) : <p>Keep swiping to reveal your shared genres.</p>}</div>
+          <div><small>ACTIVITY ENERGY</small>{vibes.length ? vibes.map(([label, count]) => <span key={label}><b>{label}</b><i>{count}</i></span>) : <p>Your first activity match will shape this.</p>}</div>
+        </div>
+        <div className="taste-insight"><Sparkles size={18} /><span><b>{media[0] ? `Try more ${genres[0]?.[0] ?? "unexpected"} picks` : "Your taste map is just beginning"}</b><small>Recommendations become more personal as both of you react honestly.</small></span></div>
+      </section>
+    </div>
+  );
+}
+
+function ChallengeSheet({ session, onSave, onClose }: {
+  session: SessionSnapshot;
+  onSave: (payload: PairEvent["payload"]) => void;
+  onClose: () => void;
+}) {
+  const challenges = [
+    ["world-tour", "Three countries, three stories", "Match with films from three different countries.", 3],
+    ["new-thing", "One new thing this month", "Complete an activity neither of you has tried.", 1],
+    ["twenty-euro", "The €20 adventure", "Plan something memorable together for €20 or less.", 1],
+    ["mini-series", "Finish a mini-series", "Choose, schedule, and complete one short series.", 1],
+    ["your-turn", "Let your person choose", "Use a Golden Pick and commit without negotiation.", 1],
+  ] as const;
+  const current = [...session.events].filter((event) => event.type === "challenge").sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+  return (
+    <div className="sheet-backdrop" onMouseDown={onClose}>
+      <section className="bottom-sheet challenge-sheet" onMouseDown={(event) => event.stopPropagation()}>
+        <button className="sheet-close" onClick={onClose}><X size={20} /></button>
+        <p>A LITTLE SHARED QUEST</p><h2>Choose your next challenge.</h2>
+        {current && <div className="current-challenge"><Trophy size={20} /><span><b>{String(current.payload.title)}</b><small>Currently active · {String(current.payload.progress ?? 0)}/{String(current.payload.goal ?? 1)} complete</small></span></div>}
+        <div className="challenge-list">{challenges.map(([id, title, description, goal]) => (
+          <button key={id} onClick={() => onSave({ id, title, description, goal, progress: 0, startedAt: new Date().toISOString() })}>
+            <span><Gift size={18} /></span><div><b>{title}</b><small>{description}</small></div><ChevronRight size={17} />
+          </button>
+        ))}</div>
+      </section>
+    </div>
+  );
+}
+
+function PersonalizeSheet({ session, onSave, onClose }: {
+  session: SessionSnapshot;
+  onSave: (theme: string, providers: string[]) => void;
+  onClose: () => void;
+}) {
+  const currentTheme = String([...session.events].filter((event) => event.type === "theme").sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]?.payload.theme ?? "violet");
+  const myServices = latestEvent(session.events, "services", session.user.id);
+  const [theme, setTheme] = useState(currentTheme);
+  const [providers, setProviders] = useState(String(myServices?.payload.providers ?? "").split("|").filter(Boolean));
+  const options = ["Netflix", "Amazon Prime Video", "Disney Plus", "Apple TV Plus", "Max", "JioHotstar", "MUBI"];
+  const toggle = (provider: string) => setProviders((current) => current.includes(provider) ? current.filter((item) => item !== provider) : [...current, provider]);
+  return (
+    <div className="sheet-backdrop" onMouseDown={onClose}>
+      <section className="bottom-sheet personalize-sheet" onMouseDown={(event) => event.stopPropagation()}>
+        <button className="sheet-close" onClick={onClose}><X size={20} /></button>
+        <p>MAKE IT YOURS</p><h2>Your shared-space personality.</h2>
+        <h3>Colour mood</h3><div className="theme-picker">{[["violet","Violet"],["ocean","Ocean"],["sunset","Sunset"],["forest","Forest"]].map(([id,label]) => <button key={id} className={`${id} ${theme === id ? "selected" : ""}`} onClick={() => setTheme(id)}><i />{label}{theme === id && <Check size={13} />}</button>)}</div>
+        <h3>Your streaming services</h3><small>When both people add theirs, discovery quietly prioritizes services you share.</small>
+        <div className="service-picker">{options.map((provider) => <button key={provider} className={providers.includes(provider) ? "selected" : ""} onClick={() => toggle(provider)}>{providers.includes(provider) && <Check size={12} />}{provider}</button>)}</div>
+        <button className="primary-button" onClick={() => onSave(theme, providers)}>Save my side</button>
+      </section>
+    </div>
+  );
+}
+
+function AddIdeaSheet({ onSave, onClose }: { onSave: (item: ActivityItem) => void; onClose: () => void }) {
+  const [title, setTitle] = useState("");
+  const [url, setUrl] = useState("");
+  const [note, setNote] = useState("");
+  const [category, setCategory] = useState("Something ours");
+  return (
+    <div className="sheet-backdrop" onMouseDown={onClose}>
+      <section className="bottom-sheet idea-sheet" onMouseDown={(event) => event.stopPropagation()}>
+        <button className="sheet-close" onClick={onClose}><X size={20} /></button>
+        <p>SHARED IDEA INBOX</p><h2>Drop it here before you forget.</h2>
+        <small>A place, reel, restaurant, screenshot link, or plain passing thought becomes a card for both of you.</small>
+        <label>Idea<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Try the tiny ramen place…" maxLength={70} /></label>
+        <label><Link2 size={14} /> Optional link<input type="url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://…" /></label>
+        <label>What caught your eye?<input value={note} onChange={(event) => setNote(event.target.value)} placeholder="The sunset view looked unreal" maxLength={220} /></label>
+        <label>Kind<select value={category} onChange={(event) => setCategory(event.target.value)}><option>Something ours</option><option>Food & drink</option><option>Outdoors</option><option>Culture</option><option>At home</option><option>Trip idea</option></select></label>
+        <button className="primary-button" disabled={title.trim().length < 2} onClick={() => {
+          const image = activityCatalog[Math.abs(title.length * 7) % activityCatalog.length]?.image ?? "";
+          onSave({ id: `idea-${crypto.randomUUID()}`, kind: "activity", title: title.trim(), category, budget: "€", duration: "To decide", distanceKm: 0, location: "Shared idea inbox", vibes: ["From your person"], image, summary: note.trim() || "Something one of you wanted to remember.", custom: true, ...(url.trim() ? { sourceUrl: url.trim() } : {}) });
+        }}><Plus size={17} /> Add for both of us</button>
+      </section>
+    </div>
+  );
+}
+
 function TonightSheet({
   session,
   onSave,
@@ -2463,6 +2769,7 @@ function TonightSheet({
     String(existing?.payload.energy ?? "Low-key"),
   );
   const [budget, setBudget] = useState(String(existing?.payload.budget ?? "€"));
+  const [weather, setWeather] = useState(String(existing?.payload.weather ?? "Anything"));
   return (
     <div className="sheet-backdrop" onMouseDown={onClose}>
       <section
@@ -2505,9 +2812,10 @@ function TonightSheet({
           value={budget}
           onChange={setBudget}
         />
+        <ChoiceRow title="Weather outside" options={["Anything", "Clear", "Rainy", "Too hot", "Too cold"]} value={weather} onChange={setWeather} />
         <button
           className="primary-button"
-          onClick={() => onSave({ mood, time, energy, budget })}
+          onClick={() => onSave({ mood, time, energy, budget, weather })}
         >
           Add my vibe
         </button>
@@ -2548,16 +2856,25 @@ function ChoiceRow({
 
 function RouletteSheet({
   matches,
+  session,
   onClose,
   onPlan,
+  onNominate,
 }: {
   matches: Item[];
+  session: SessionSnapshot;
   onClose: () => void;
   onPlan: (item: Item) => void;
+  onNominate: (item: Item) => void;
 }) {
+  const [mode, setMode] = useState<"roulette" | "quick" | "tournament" | "nominate">("roulette");
   const [index, setIndex] = useState(0);
   const [spinning, setSpinning] = useState(false);
+  const [tournament, setTournament] = useState<Item[]>(() => matches.slice(0, 8));
   const chosen = matches[index % Math.max(1, matches.length)];
+  const nominations = session.events.filter((event) => event.type === "nomination");
+  const partnerNomination = nominations.find((event) => event.userId !== session.user.id);
+  const myNomination = nominations.find((event) => event.userId === session.user.id);
   function spin() {
     if (!matches.length || spinning) return;
     setSpinning(true);
@@ -2574,6 +2891,19 @@ function RouletteSheet({
       90 + ticks * 8,
     );
   }
+  function quickPick() {
+    if (!matches.length) return;
+    setSpinning(true);
+    window.setTimeout(() => {
+      setIndex(Math.floor(Math.random() * Math.min(5, matches.length)));
+      setSpinning(false);
+    }, 650);
+  }
+  function advanceTournament(winner: Item) {
+    const next = [winner, ...tournament.slice(2)];
+    setTournament(next);
+    if (next.length === 1) setIndex(Math.max(0, matches.findIndex((item) => itemKey(item) === itemKey(winner))));
+  }
   return (
     <div className="sheet-backdrop" onMouseDown={onClose}>
       <section
@@ -2584,8 +2914,30 @@ function RouletteSheet({
           <X size={20} />
         </button>
         <p>THE WHEEL OF INDECISION</p>
-        <h2>Let your matches choose.</h2>
-        {chosen ? (
+        <h2>Choose how you decide.</h2>
+        <div className="decision-tabs">
+          <button className={mode === "roulette" ? "selected" : ""} onClick={() => setMode("roulette")}>Surprise</button>
+          <button className={mode === "quick" ? "selected" : ""} onClick={() => setMode("quick")}>Quick 5</button>
+          <button className={mode === "tournament" ? "selected" : ""} onClick={() => setMode("tournament")}>Tournament</button>
+          <button className={mode === "nominate" ? "selected" : ""} onClick={() => setMode("nominate")}>One each</button>
+        </div>
+        {mode === "tournament" && tournament.length > 1 ? (
+          <div className="tournament-pair">
+            <small>Pick the one that survives this round</small>
+            <div>{tournament.slice(0, 2).map((item) => (
+              <button key={itemKey(item)} onClick={() => advanceTournament(item)}>
+                <img src={item.image} alt="" onError={imageFallback} /><b>{item.title}</b>
+              </button>
+            ))}</div>
+            <span>{tournament.length} contenders left</span>
+          </div>
+        ) : mode === "nominate" ? (
+          <div className="nomination-mode">
+            {myNomination ? <><Crown size={26} /><b>Your nomination is locked in.</b><small>{partnerNomination ? "Both choices are ready—reveal them together." : "Waiting for your person. They cannot see yours yet."}</small></> : <><Heart size={25} /><b>Secretly nominate one match</b><small>Your person chooses one too. No awkward persuasion required.</small></>}
+            {!myNomination && chosen && <button className="outline-button" onClick={() => onNominate(chosen)}>Nominate {chosen.title}</button>}
+            {myNomination && partnerNomination && <div className="nomination-reveal">Two nominations are in. Use Surprise to break the tie.</div>}
+          </div>
+        ) : chosen ? (
           <div
             className={spinning ? "roulette-pick spinning" : "roulette-pick"}
           >
@@ -2598,14 +2950,19 @@ function RouletteSheet({
         )}
         <button
           className="primary-button"
-          disabled={!matches.length || spinning}
-          onClick={spin}
+          disabled={!matches.length || spinning || mode === "tournament" || mode === "nominate"}
+          onClick={mode === "quick" ? quickPick : spin}
         >
-          <Dices size={18} /> {spinning ? "Choosing…" : "Spin again"}
+          <Dices size={18} /> {spinning ? "Choosing…" : mode === "quick" ? "Pick from five" : "Spin again"}
         </button>
-        {chosen && !spinning && (
+        {chosen && !spinning && mode !== "tournament" && mode !== "nominate" && (
           <button className="outline-button" onClick={() => onPlan(chosen)}>
             That’s the one—plan it
+          </button>
+        )}
+        {mode === "tournament" && tournament.length === 1 && (
+          <button className="outline-button" onClick={() => onPlan(tournament[0])}>
+            Winner: {tournament[0].title} — plan it
           </button>
         )}
       </section>
@@ -2623,6 +2980,9 @@ function PlanSheet({
   onClose: () => void;
 }) {
   const [when, setWhen] = useState("");
+  const [location, setLocation] = useState(item.kind === "activity" ? item.location : "At home");
+  const [owner, setOwner] = useState("Decide together");
+  const [note, setNote] = useState("");
   return (
     <div className="sheet-backdrop" onMouseDown={onClose}>
       <section
@@ -2644,6 +3004,22 @@ function PlanSheet({
             onChange={(event) => setWhen(event.target.value)}
           />
         </label>
+        <label>
+          Where
+          <input placeholder="At home, the cinema, a place…" value={location} onChange={(event) => setLocation(event.target.value)} />
+        </label>
+        <label>
+          Who takes the lead?
+          <select value={owner} onChange={(event) => setOwner(event.target.value)}>
+            <option>Decide together</option>
+            <option>I’ll arrange it</option>
+            <option>My person arranges it</option>
+          </select>
+        </label>
+        <label>
+          Tiny note
+          <input placeholder="Snacks, tickets, what to bring…" value={note} onChange={(event) => setNote(event.target.value)} />
+        </label>
         <div className="quick-dates">
           <button onClick={() => setWhen("Tonight")}>Tonight</button>
           <button onClick={() => setWhen("Friday")}>Friday</button>
@@ -2653,7 +3029,7 @@ function PlanSheet({
         <button
           className="primary-button"
           disabled={!when}
-          onClick={() => onSave({ when })}
+          onClick={() => onSave({ when, location, owner, note })}
         >
           Send to your person
         </button>
@@ -2668,10 +3044,13 @@ function RatingSheet({
   onClose,
 }: {
   item: Item;
-  onSave: (rating: number) => void;
+  onSave: (payload: PairEvent["payload"]) => void;
   onClose: () => void;
 }) {
   const [rating, setRating] = useState(0);
+  const [note, setNote] = useState("");
+  const [photo, setPhoto] = useState("");
+  const [happenedAt, setHappenedAt] = useState(new Date().toISOString().slice(0, 10));
   return (
     <div className="sheet-backdrop" onMouseDown={onClose}>
       <section
@@ -2695,10 +3074,13 @@ function RatingSheet({
             </button>
           ))}
         </div>
+        <label>Date<input type="date" value={happenedAt} onChange={(event) => setHappenedAt(event.target.value)} /></label>
+        <label>Your little memory<input value={note} onChange={(event) => setNote(event.target.value)} placeholder="An inside joke, favourite moment…" maxLength={220} /></label>
+        <label><Camera size={14} /> Optional photo link<input type="url" value={photo} onChange={(event) => setPhoto(event.target.value)} placeholder="Paste a shared photo link" /></label>
         <button
           className="primary-button"
           disabled={!rating}
-          onClick={() => onSave(rating)}
+          onClick={() => onSave({ rating, note, photo, happenedAt })}
         >
           Save our memory
         </button>
@@ -3589,6 +3971,11 @@ function DetailSheet({
               <Globe2 size={16} /> See where to watch
             </a>
           )}
+          {item.kind === "activity" && item.sourceUrl && (
+            <a className="watch-link" href={item.sourceUrl} target="_blank" rel="noreferrer">
+              <Link2 size={16} /> Open the original idea
+            </a>
+          )}
           {isMatch && (
             <div className="detail-actions">
               <button className="primary-button" onClick={onPlan}>
@@ -3713,6 +4100,30 @@ function mostCommon(values: string[]) {
   const counts = new Map<string, number>();
   values.forEach((value) => counts.set(value, (counts.get(value) ?? 0) + 1));
   return [...counts].sort((a, b) => b[1] - a[1])[0]?.[0];
+}
+function topCounts(values: string[], limit: number): Array<[string, number]> {
+  const counts = new Map<string, number>();
+  values.filter(Boolean).forEach((value) => counts.set(value, (counts.get(value) ?? 0) + 1));
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit);
+}
+function downloadCalendar(item: Item, when: string, location: string) {
+  const parsed = new Date(when);
+  const start = Number.isNaN(parsed.getTime()) ? new Date(Date.now() + 24 * 60 * 60 * 1000) : parsed;
+  if (Number.isNaN(parsed.getTime())) start.setHours(19, 0, 0, 0);
+  const end = new Date(start.getTime() + (item.kind === "activity" ? 2 : 2.5) * 60 * 60 * 1000);
+  const stamp = (date: Date) => date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const escape = (value: string) => value.replace(/([,;\\])/g, "\\$1").replace(/\n/g, "\\n");
+  const calendar = [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//ReelTogether//Pair Plan//EN", "BEGIN:VEVENT",
+    `UID:${crypto.randomUUID()}@reeltogether`, `DTSTAMP:${stamp(new Date())}`, `DTSTART:${stamp(start)}`, `DTEND:${stamp(end)}`,
+    `SUMMARY:${escape(item.title)} together`, `DESCRIPTION:${escape(item.summary)}`, `LOCATION:${escape(location)}`,
+    "END:VEVENT", "END:VCALENDAR",
+  ].join("\r\n");
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([calendar], { type: "text/calendar;charset=utf-8" }));
+  link.download = `${item.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-together.ics`;
+  link.click();
+  URL.revokeObjectURL(link.href);
 }
 function findItem(itemId: string, kind: PairEvent["kind"], catalog: Item[]): Item | undefined {
   return catalog.find(

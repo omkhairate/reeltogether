@@ -33,6 +33,10 @@ Deno.serve(async (request) => {
       complete: ["Memory made", `${itemTitle} was marked complete.`],
       rating: ["Rate it together", `${sender?.display_name ?? "Your person"} left a private rating.`],
       wildcard: ["Wildcard used", `${sender?.display_name ?? "Your person"} chose ${itemTitle}.`],
+      reaction: ["A pick is waiting", `${sender?.display_name ?? "Your person"} reacted to ${itemTitle}.`],
+      memory: ["A memory was added", `${sender?.display_name ?? "Your person"} saved a moment from ${itemTitle}.`],
+      challenge: ["New pair challenge", `${sender?.display_name ?? "Your person"} started something new for both of you.`],
+      nomination: ["A secret choice is in", `${sender?.display_name ?? "Your person"} locked in their nomination.`],
     };
     const [title, body] = copy[type] ?? ["ReelTogether", `${sender?.display_name ?? "Your person"} updated your shared list.`];
     webpush.setVapidDetails(

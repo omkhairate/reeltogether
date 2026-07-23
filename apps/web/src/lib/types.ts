@@ -8,7 +8,20 @@ export type PairEventType =
   | "plan"
   | "confirm"
   | "complete"
-  | "rating";
+  | "rating"
+  | "reaction"
+  | "memory"
+  | "challenge"
+  | "theme"
+  | "services"
+  | "nomination";
+
+export type ReactionType =
+  | "absolutely"
+  | "maybe"
+  | "not-tonight"
+  | "already"
+  | "golden";
 
 export type MediaItem = {
   id: string;
@@ -40,6 +53,7 @@ export type ActivityItem = {
   image: string;
   summary: string;
   custom?: boolean;
+  sourceUrl?: string;
 };
 
 export type DiscoveryFilters = {

@@ -350,6 +350,7 @@ export async function loadCloudSnapshot(
     { data: memberRows, error: memberError },
     { data: voteRows, error: voteError },
     { data: eventRows, error: eventError },
+    { data: extraRows, error: extraError },
     { data: itemRows, error: itemError },
   ] = await Promise.all([
     client.from("shared_lists").select("*").eq("id", listId).single(),
@@ -366,6 +367,10 @@ export async function loadCloudSnapshot(
       .select("id,user_id,event_type,item_id,kind,payload,updated_at")
       .eq("list_id", listId),
     client
+      .from("pair_extras")
+      .select("id,user_id,extra_type,item_id,kind,payload,updated_at")
+      .eq("list_id", listId),
+    client
       .from("list_items")
       .select("data")
       .eq("list_id", listId),
@@ -374,6 +379,9 @@ export async function loadCloudSnapshot(
   if (memberError) throw memberError;
   if (voteError) throw voteError;
   if (eventError) throw eventError;
+  // pair_extras is an additive launch table. During a rolling deployment an
+  // older project can still restore every existing list without it.
+  if (extraError && extraError.code !== "42P01") throw extraError;
   if (itemError) throw itemError;
   const members: Member[] = (memberRows ?? []).map((row) => {
     const profile = Array.isArray(row.profiles)
@@ -401,6 +409,15 @@ export async function loadCloudSnapshot(
     payload: (row.payload ?? {}) as PairEvent["payload"],
     updatedAt: String(row.updated_at),
   }));
+  events.push(...(extraRows ?? []).map((row) => ({
+    id: String(row.id),
+    userId: String(row.user_id),
+    type: row.extra_type as PairEventType,
+    itemId: String(row.item_id),
+    kind: row.kind as PairEvent["kind"],
+    payload: (row.payload ?? {}) as PairEvent["payload"],
+    updatedAt: String(row.updated_at),
+  })));
   const savedItems = (itemRows ?? [])
     .map((row) => row.data as MediaItem | ActivityItem)
     .filter((item) => Boolean(item?.id && item?.kind));
@@ -535,11 +552,15 @@ export async function saveCloudPairEvent(
   event: Omit<PairEvent, "id" | "updatedAt">,
 ) {
   const client = requireCloud();
-  const { error } = await client.from("pair_events").upsert(
+  const legacyTypes: PairEventType[] = [
+    "tonight", "nudge", "wildcard", "plan", "confirm", "complete", "rating",
+  ];
+  const isLegacy = legacyTypes.includes(event.type);
+  const { error } = await client.from(isLegacy ? "pair_events" : "pair_extras").upsert(
     {
       list_id: listId,
       user_id: event.userId,
-      event_type: event.type,
+      ...(isLegacy ? { event_type: event.type } : { extra_type: event.type }),
       item_id: event.itemId,
       kind: event.kind,
       payload: event.payload,
@@ -565,6 +586,7 @@ export function subscribeToCloudList(
     "list_members",
     "votes",
     "pair_events",
+    "pair_extras",
     "list_items",
   ].map((table) =>
     supabase

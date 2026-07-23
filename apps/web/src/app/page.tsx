@@ -649,6 +649,7 @@ export default function ReelTogetherApp() {
     return (
       <>
         <Onboarding
+          identity={identity}
           onComplete={(next) => {
             setSession(next);
             if (cloudConfigured) void getCloudIdentity().then(setIdentity);
@@ -898,6 +899,7 @@ function LoadingScreen() {
 }
 
 function Onboarding({
+  identity,
   onComplete,
   onError,
   onInstall,
@@ -905,6 +907,7 @@ function Onboarding({
   onCreateAccount,
   isInstalled,
 }: {
+  identity: CloudIdentity | null;
   onComplete: (session: SessionSnapshot) => void;
   onError: (message: string) => void;
   onInstall: () => void;
@@ -919,6 +922,7 @@ function Onboarding({
     typeof window === "undefined"
       ? ""
       : (new URLSearchParams(window.location.search).get("join") ?? "");
+  const accountReady = Boolean(identity && !identity.isAnonymous);
 
   async function submit() {
     if (name.trim().length < 2) return;
@@ -956,13 +960,14 @@ function Onboarding({
           <strong>reeltogether</strong>
         </div>
         <div className="onboarding-copy">
-          <p>{inviteCode ? "YOU’VE BEEN INVITED" : "PICK TOGETHER"}</p>
+          <p>{inviteCode ? "YOU’VE BEEN INVITED" : accountReady ? "ACCOUNT READY" : "PICK TOGETHER"}</p>
           <h1>
-            {inviteCode ? "Join your friend’s list." : "Decide what’s next."}
+            {inviteCode ? "Join your friend’s list." : accountReady ? "Finish your setup." : "Decide what’s next."}
           </h1>
           <span>
-            Swipe films, shows, and things to do privately. When you both choose
-            the same idea, it becomes a match.
+            {accountReady
+              ? `You’re signed in as ${identity?.email}. Add your name and create the first shared list.`
+              : "Swipe films, shows, and things to do privately. When you both choose the same idea, it becomes a match."}
           </span>
         </div>
         <label>
@@ -992,9 +997,14 @@ function Onboarding({
             ? "Getting things ready…"
             : inviteCode
               ? "Join shared list"
-              : "Create shared list"}
+              : accountReady
+                ? "Finish setup"
+                : "Create shared list"}
         </button>
-        {cloudConfigured && (
+        {accountReady && (
+          <div className="account-ready-note"><ShieldCheck size={16} /> Account created successfully</div>
+        )}
+        {cloudConfigured && !accountReady && (
           <div className="account-choices">
             <button className="account-create" onClick={() => {
               if (name.trim().length < 2) {

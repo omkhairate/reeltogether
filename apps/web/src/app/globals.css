@@ -1595,6 +1595,7 @@ img {
 .account-choices { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; }
 .account-create { display: flex; width: 100%; min-height: 43px; align-items: center; justify-content: center; gap: 7px; color: var(--purple); border: 1px solid rgba(107,80,198,.22); border-radius: 13px; background: var(--purple-soft); font-size: 11px; font-weight: 850; }
 .account-choices .account-shortcut { min-height: 34px; margin: 0; padding: 6px 3px; font-size: 10px; }
+.account-ready-note { display: flex; min-height: 38px; align-items: center; justify-content: center; gap: 7px; margin-top: 10px; color: #277b72; border-radius: 12px; background: rgba(61,167,162,.09); font-size: 10px; font-weight: 800; }
 .discover-actions { display: flex; gap: 7px; }
 .discover-actions > button { position: relative; display: grid; width: 40px; height: 40px; place-items: center; color: var(--purple); border: 1px solid var(--line); border-radius: 13px; background: white; box-shadow: var(--shadow); }
 .discover-actions button i { position: absolute; top: -4px; right: -4px; display: grid; min-width: 17px; height: 17px; padding: 0 4px; place-items: center; color: white; border: 2px solid var(--paper); border-radius: 10px; background: var(--purple); font-size: 8px; font-style: normal; font-weight: 850; }

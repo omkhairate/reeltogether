@@ -77,6 +77,7 @@ import {
 type View = "home" | "discover" | "matches" | "lists";
 type Deck = "watch" | "activities";
 type Item = MediaItem | ActivityItem;
+type PendingSetup = { name: string; listName: string; inviteCode: string };
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -84,6 +85,7 @@ interface BeforeInstallPromptEvent extends Event {
 }
 
 const STORAGE_KEY = "reeltogether.session.v2";
+const PENDING_SETUP_KEY = "reeltogether.pending-setup.v1";
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ?? "";
 function imageFallback(event: React.SyntheticEvent<HTMLImageElement>) {
@@ -148,6 +150,7 @@ export default function ReelTogetherApp() {
   const [showInstallHelp, setShowInstallHelp] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
   const [accountMode, setAccountMode] = useState<"signup" | "signin" | "manage">("signin");
+  const [pendingSetup, setPendingSetup] = useState<PendingSetup | null>(null);
   const [isInstalled, setIsInstalled] = useState(false);
   const [identity, setIdentity] = useState<CloudIdentity | null>(null);
   const [showTonight, setShowTonight] = useState(false);
@@ -184,6 +187,17 @@ export default function ReelTogetherApp() {
   useEffect(() => {
     async function restore() {
       const saved = localStorage.getItem(STORAGE_KEY);
+      const setupFromUrl = new URLSearchParams(window.location.search).get("setup");
+      const setupValue = setupFromUrl ?? localStorage.getItem(PENDING_SETUP_KEY);
+      let pending: PendingSetup | null = null;
+      if (setupValue) {
+        try {
+          const candidate = JSON.parse(setupValue) as PendingSetup;
+          if (candidate.name?.trim().length >= 2) pending = candidate;
+        } catch {
+          localStorage.removeItem(PENDING_SETUP_KEY);
+        }
+      }
       let parsed: SessionSnapshot | null = null;
       if (saved) {
         try {
@@ -208,10 +222,24 @@ export default function ReelTogetherApp() {
         }
         if (parsed && parsed.user.id === currentIdentity.id) {
           setSession(await loadCloudSnapshot(parsed.user, parsed.list.id));
+          localStorage.removeItem(PENDING_SETUP_KEY);
         } else {
           const restored = await restoreCloudAccount();
-          setSession(restored);
-          if (!restored) localStorage.removeItem(STORAGE_KEY);
+          if (restored) {
+            setSession(restored);
+            localStorage.removeItem(PENDING_SETUP_KEY);
+          } else if (pending) {
+            const user = await ensureCloudUser(pending.name);
+            const listId = pending.inviteCode
+              ? await joinCloudList(pending.inviteCode)
+              : await createCloudList(user, pending.listName || "Our shared list", deviceFilters());
+            setSession(await loadCloudSnapshot(user, listId));
+            localStorage.removeItem(PENDING_SETUP_KEY);
+            history.replaceState({}, "", window.location.pathname);
+          } else {
+            setSession(null);
+            localStorage.removeItem(STORAGE_KEY);
+          }
         }
       } catch (reason) {
         console.error(reason);
@@ -628,7 +656,11 @@ export default function ReelTogetherApp() {
           onError={setError}
           onInstall={installApp}
           onSignIn={() => { setAccountMode("signin"); setShowAccount(true); }}
-          onCreateAccount={() => { setAccountMode("signup"); setShowAccount(true); }}
+          onCreateAccount={(setup) => {
+            setPendingSetup(setup);
+            setAccountMode("signup");
+            setShowAccount(true);
+          }}
           isInstalled={isInstalled}
         />
         {showInstallHelp && (
@@ -638,6 +670,7 @@ export default function ReelTogetherApp() {
           <AccountSheet
             mode={accountMode}
             identity={identity}
+            pendingSetup={pendingSetup}
             onClose={() => setShowAccount(false)}
             onSignedOut={() => undefined}
           />
@@ -876,7 +909,7 @@ function Onboarding({
   onError: (message: string) => void;
   onInstall: () => void;
   onSignIn: () => void;
-  onCreateAccount: () => void;
+  onCreateAccount: (setup: PendingSetup) => void;
   isInstalled: boolean;
 }) {
   const [name, setName] = useState("");
@@ -902,6 +935,7 @@ function Onboarding({
         ? await joinCloudList(inviteCode)
         : await createCloudList(user, listName.trim() || "Our shared list", deviceFilters());
       onComplete(await loadCloudSnapshot(user, listId));
+      localStorage.removeItem(PENDING_SETUP_KEY);
       history.replaceState({}, "", window.location.pathname);
     } catch (reason) {
       onError(
@@ -962,7 +996,17 @@ function Onboarding({
         </button>
         {cloudConfigured && (
           <div className="account-choices">
-            <button className="account-create" onClick={onCreateAccount}>
+            <button className="account-create" onClick={() => {
+              if (name.trim().length < 2) {
+                onError("Add your name first so we can finish your account after the email link.");
+                return;
+              }
+              onCreateAccount({
+                name: name.trim(),
+                listName: listName.trim() || "Our shared list",
+                inviteCode,
+              });
+            }}>
               <CircleUserRound size={17} /> Create an account
             </button>
             <button className="account-shortcut" onClick={onSignIn}>
@@ -2197,11 +2241,13 @@ function MatchCelebration({
 function AccountSheet({
   mode,
   identity,
+  pendingSetup,
   onClose,
   onSignedOut,
 }: {
   mode: "signup" | "signin" | "manage";
   identity: CloudIdentity | null;
+  pendingSetup?: PendingSetup | null;
   onClose: () => void;
   onSignedOut: () => void;
 }) {
@@ -2216,7 +2262,13 @@ function AccountSheet({
     setBusy(true);
     setMessage("");
     try {
-      const redirectTo = `${window.location.origin}${window.location.pathname}`;
+      const redirect = new URL(`${window.location.origin}${window.location.pathname}`);
+      if (mode === "signup" && pendingSetup) {
+        const serialized = JSON.stringify(pendingSetup);
+        localStorage.setItem(PENDING_SETUP_KEY, serialized);
+        redirect.searchParams.set("setup", serialized);
+      }
+      const redirectTo = redirect.toString();
       if (securing) await secureCloudAccount(email, redirectTo);
       else if (mode === "signup") await sendCloudSignUpLink(email, redirectTo);
       else await sendCloudSignInLink(email, redirectTo);
@@ -2304,7 +2356,7 @@ function AccountSheet({
               {securing
                 ? "Link an email without losing this list or any of your votes."
                 : mode === "signup"
-                  ? "We’ll create your account with a secure email link—no password needed."
+                  ? "We’ll create your account with a secure email link. When you return, your shared list will open automatically."
                   : "We’ll email you a secure sign-in link—no password needed."}
             </small>
             <label>

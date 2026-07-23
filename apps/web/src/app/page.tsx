@@ -91,6 +91,17 @@ function imageFallback(event: React.SyntheticEvent<HTMLImageElement>) {
   image.onerror = null;
   image.src = `${basePath}/poster-placeholder.svg`;
 }
+function deviceRegion() {
+  if (typeof navigator === "undefined") return "US";
+  try {
+    return new Intl.Locale(navigator.language).region ?? "US";
+  } catch {
+    return "US";
+  }
+}
+function deviceFilters(): DiscoveryFilters {
+  return { ...defaultFilters, region: deviceRegion() };
+}
 
 function createLocalSession(
   displayName: string,
@@ -106,7 +117,7 @@ function createLocalSession(
       name: listName,
       threshold: 2,
       contentMode: "mixed",
-      filters: defaultFilters,
+      filters: deviceFilters(),
     },
     members: [user, friend],
     votes: [
@@ -343,12 +354,17 @@ export default function ReelTogetherApp() {
   );
 
   const mediaItems = useMemo(
-    () => dedupeItems([
-      ...remoteMedia,
-      ...mediaCatalog,
-      ...(session?.savedItems.filter((item): item is MediaItem => item.kind !== "activity") ?? []),
-    ]),
-    [remoteMedia, session?.savedItems],
+    () => {
+      const saved = session?.savedItems.filter((item): item is MediaItem => item.kind !== "activity") ?? [];
+      const legacyReferenced = mediaCatalog.filter((item) =>
+        session?.votes.some((vote) => vote.itemId === item.id && vote.kind === item.kind) ||
+        session?.events.some((event) => event.itemId === item.id && event.kind === item.kind),
+      );
+      return dedupeItems(remoteMedia.length
+        ? [...remoteMedia, ...saved, ...legacyReferenced]
+        : [...mediaCatalog, ...saved]);
+    },
+    [remoteMedia, session?.savedItems, session?.votes, session?.events],
   );
   const activityItems = useMemo(
     () => dedupeItems([
@@ -884,7 +900,7 @@ function Onboarding({
       const user = await ensureCloudUser(name.trim());
       const listId = inviteCode
         ? await joinCloudList(inviteCode)
-        : await createCloudList(user, listName.trim() || "Our shared list");
+        : await createCloudList(user, listName.trim() || "Our shared list", deviceFilters());
       onComplete(await loadCloudSnapshot(user, listId));
       history.replaceState({}, "", window.location.pathname);
     } catch (reason) {
@@ -2476,7 +2492,7 @@ function FiltersSheet({
   onClose: () => void;
   onSave: (filters: DiscoveryFilters) => void;
 }) {
-  const [draft, setDraft] = useState(filters);
+  const [draft, setDraft] = useState({ ...filters, region: filters.region || deviceRegion() });
   const mediaOptions = {
     genres: [...new Set([...filterOptions.genres, ...mediaItems.flatMap((item) => item.genres)])].sort(),
     languages: [...new Set([...filterOptions.languages, ...mediaItems.map((item) => item.language)])].sort(),
@@ -2512,10 +2528,10 @@ function FiltersSheet({
           <>
             <FilterGroup
               title="Country for streaming"
-              values={["IN", "DE", "GB", "US", "CA", "AU", "FR", "ES", "IT"]}
+              values={[...new Set([draft.region, "US", "GB", "IN", "CA", "AU", "DE", "FR", "ES", "IT", "NL", "SE", "NO", "DK", "BR", "MX", "JP", "KR", "SG", "NZ"])]}
               selected={[draft.region]}
               onToggle={(value) => setDraft({ ...draft, region: value })}
-              labels={{ IN: "India", DE: "Germany", GB: "United Kingdom", US: "United States", CA: "Canada", AU: "Australia", FR: "France", ES: "Spain", IT: "Italy" }}
+              labels={Object.fromEntries([...new Set([draft.region, "US", "GB", "IN", "CA", "AU", "DE", "FR", "ES", "IT", "NL", "SE", "NO", "DK", "BR", "MX", "JP", "KR", "SG", "NZ"])].map((region) => [region, regionName(region)]))}
             />
             <FilterGroup
               title="Type"
@@ -2586,7 +2602,7 @@ function FiltersSheet({
           <i>{draft.hideCompleted ? <Check size={13} /> : null}</i>
         </button>
         <div className="sheet-actions">
-          <button onClick={() => setDraft(defaultFilters)}>Reset</button>
+          <button onClick={() => setDraft(deviceFilters())}>Reset</button>
           <button className="primary-button" onClick={() => onSave(draft)}>
             Apply for everyone
           </button>
@@ -2786,9 +2802,15 @@ function activeFilterCount(filters: DiscoveryFilters) {
     filters.activityCategories.length +
     filters.budgets.length +
     (filters.maxDistanceKm < 25 ? 1 : 0) +
-    (filters.region && filters.region !== "IN" ? 1 : 0) +
     (filters.hideCompleted ? 1 : 0)
   );
+}
+function regionName(region: string) {
+  try {
+    return new Intl.DisplayNames([navigator.language], { type: "region" }).of(region) ?? region;
+  } catch {
+    return region;
+  }
 }
 function latestEvent(events: PairEvent[], type: PairEventType, userId: string) {
   return events

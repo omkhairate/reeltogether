@@ -98,6 +98,6 @@ export const defaultFilters: DiscoveryFilters = {
   activityCategories: [],
   budgets: [],
   maxDistanceKm: 25,
-  region: "IN",
+  region: "",
   hideCompleted: true,
 };

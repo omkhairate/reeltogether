@@ -148,6 +148,7 @@ export async function signOutCloudAccount() {
 export async function createCloudList(
   user: Member,
   name: string,
+  filters: DiscoveryFilters = defaultFilters,
 ): Promise<string> {
   const client = requireCloud();
   const id = crypto.randomUUID();
@@ -158,7 +159,7 @@ export async function createCloudList(
     name: name.trim().slice(0, 60),
     threshold: 2,
     content_mode: "mixed",
-    filters: defaultFilters,
+    filters,
     owner_id: user.id,
   });
   if (listError) throw listError;

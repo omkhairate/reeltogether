@@ -56,7 +56,7 @@ Deno.serve(async (request) => {
     const token = Deno.env.get("TMDB_ACCESS_TOKEN");
     if (!token) throw new Error("TMDB_ACCESS_TOKEN is not configured");
     const { page = 1, filters = {} } = await request.json() as { page?: number; filters?: Filters };
-    const region = (filters.region || "IN").toUpperCase();
+    const region = (filters.region || "US").toUpperCase();
     const kinds = filters.mediaKinds?.length ? filters.mediaKinds : ["movie", "show"];
 
     const providerLists = await Promise.all(kinds.map((kind) =>

@@ -1240,8 +1240,8 @@ export default function ReelTogetherApp() {
         <RatingSheet
           item={rateItem}
           onSave={(payload) => {
-            void addPairEvent("complete", rateItem, { happenedAt: payload.happenedAt });
-            void addPairEvent("rating", rateItem, { rating: payload.rating });
+            void addPairEvent("complete", rateItem, { happenedAt: String(payload.happenedAt ?? "") });
+            void addPairEvent("rating", rateItem, { rating: Number(payload.rating ?? 0) });
             void addPairEvent("memory", rateItem, payload);
             setRateItem(null);
             notify("Saved to your history");

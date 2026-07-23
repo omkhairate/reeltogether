@@ -2904,6 +2904,7 @@ function RouletteSheet({
     setTournament(next);
     if (next.length === 1) setIndex(Math.max(0, matches.findIndex((item) => itemKey(item) === itemKey(winner))));
   }
+  const tournamentWinner = tournament[0];
   return (
     <div className="sheet-backdrop" onMouseDown={onClose}>
       <section
@@ -2960,9 +2961,9 @@ function RouletteSheet({
             That’s the one—plan it
           </button>
         )}
-        {mode === "tournament" && tournament.length === 1 && (
-          <button className="outline-button" onClick={() => onPlan(tournament[0])}>
-            Winner: {tournament[0].title} — plan it
+        {mode === "tournament" && tournamentWinner && (
+          <button className="outline-button" onClick={() => onPlan(tournamentWinner)}>
+            Winner: {tournamentWinner.title} — plan it
           </button>
         )}
       </section>

@@ -1245,6 +1245,7 @@ export default function ReelTogetherApp() {
       )}
       {celebration && (
         <MatchCelebration
+          key={itemKey(celebration)}
           item={celebration}
           session={session}
           onPlan={() => {
@@ -3120,7 +3121,7 @@ function MatchCelebration({
         </div>
         <p>YOU BOTH PICKED IT</p>
         <h1>It’s a match.</h1>
-        <div className="celebration-poster"><span>{item.kind === "activity" ? <Compass size={42} /> : <Film size={42} />}</span><img src={item.image} alt="" onError={imageFallback} /></div>
+        <div className="celebration-poster"><span>{item.kind === "activity" ? <Compass size={42} /> : <Film size={42} />}</span><img key={itemKey(item)} src={item.image} alt={item.title} onError={imageFallback} /></div>
         <h2>{item.title}</h2>
         <button className="primary-button" onClick={onPlan}>
           <CalendarDays size={17} /> Plan it together

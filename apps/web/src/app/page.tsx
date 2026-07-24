@@ -660,7 +660,11 @@ export default function ReelTogetherApp() {
     });
   }, [session, allItems]);
 
-  async function castVote(item: Item, decision: VoteDecision) {
+  async function castVote(
+    item: Item,
+    decision: VoteDecision,
+    beforeSnapshot?: Promise<unknown>,
+  ) {
     if (!session) return;
     const vote = {
       userId: session.user.id,
@@ -668,7 +672,9 @@ export default function ReelTogetherApp() {
       kind: item.kind as ContentKind,
       decision,
     };
-    const beforeMatches = matches.length;
+    const wasMatched = matches.some(
+      (match) => itemKey(match) === itemKey(item),
+    );
     const instantMatch = decision === "pick" && session.votes.some((entry) => entry.userId !== session.user.id && entry.itemId === item.id && entry.kind === item.kind && entry.decision === "pick");
     setSession((current) =>
       current
@@ -705,28 +711,14 @@ export default function ReelTogetherApp() {
       try {
         await saveCloudVote(session.list.id, vote, item);
         if (decision === "pick") void notifyCloudPartner({ listId: session.list.id, type: "vote", itemTitle: item.title });
+        // Reactions and their underlying vote are one user gesture. Wait for
+        // the reaction write before taking the authoritative snapshot so the
+        // optimistic UI cannot be rolled back by a racing refresh.
+        if (beforeSnapshot) await beforeSnapshot;
         const latest = await loadCloudSnapshot(session.user, session.list.id);
         setSession(latest);
-        const nowMatched = allItems.filter(
-          (candidate) =>
-            new Set(
-              latest.votes
-                .filter(
-                  (entry) =>
-                    entry.itemId === candidate.id &&
-                    entry.kind === candidate.kind &&
-                    entry.decision === "pick",
-                )
-                .map((entry) => entry.userId),
-            ).size >= 2 ||
-            latest.events.some(
-              (event) =>
-                event.type === "wildcard" &&
-                event.itemId === candidate.id &&
-                event.kind === candidate.kind,
-            ),
-        ).length;
-        if (nowMatched > beforeMatches) {
+        const currentItemMatched = isItemMatched(item, latest);
+        if (!instantMatch && !wasMatched && currentItemMatched) {
           setCelebration(item);
           if (navigator.vibrate) navigator.vibrate([35, 35, 70]);
         }
@@ -756,16 +748,19 @@ export default function ReelTogetherApp() {
         return;
       }
     }
-    void addPairEvent("reaction", item, { reaction });
+    const eventWrites: Promise<unknown>[] = [
+      addPairEvent("reaction", item, { reaction }),
+    ];
     if (reaction === "already") {
-      void addPairEvent("complete", item, { source: "already" });
-      await castVote(item, "pass");
+      eventWrites.push(addPairEvent("complete", item, { source: "already" }));
+      await castVote(item, "pass", Promise.all(eventWrites));
       notify("Added to your shared history");
       return;
     }
     await castVote(
       item,
       reaction === "not-tonight" ? "pass" : "pick",
+      Promise.all(eventWrites),
     );
     const copy: Record<ReactionType, string> = {
       absolutely: "Absolutely — that one felt right",
@@ -818,7 +813,6 @@ export default function ReelTogetherApp() {
       try {
         await saveCloudPairEvent(session.list.id, event);
         void notifyCloudPartner({ listId: session.list.id, type, ...(item ? { itemTitle: item.title } : {}) });
-        await refreshCloud(session);
       } catch (reason) {
         setError(
           reason instanceof Error
@@ -4056,6 +4050,27 @@ function initials(name: string) {
 }
 function itemKey(item: Item) {
   return `${item.kind}:${item.id}`;
+}
+function isItemMatched(item: Item, snapshot: SessionSnapshot) {
+  const pickers = new Set(
+    snapshot.votes
+      .filter(
+        (vote) =>
+          vote.itemId === item.id &&
+          vote.kind === item.kind &&
+          vote.decision === "pick",
+      )
+      .map((vote) => vote.userId),
+  );
+  return (
+    pickers.size >= 2 ||
+    snapshot.events.some(
+      (event) =>
+        event.type === "wildcard" &&
+        event.itemId === item.id &&
+        event.kind === item.kind,
+    )
+  );
 }
 function isCompletedItem(item: Item, events: PairEvent[]) {
   return events.some(

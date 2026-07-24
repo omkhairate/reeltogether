@@ -556,7 +556,11 @@ export async function saveCloudPairEvent(
     "tonight", "nudge", "wildcard", "plan", "confirm", "complete", "rating",
   ];
   const isLegacy = legacyTypes.includes(event.type);
-  const { error } = await client.from(isLegacy ? "pair_events" : "pair_extras").upsert(
+  const table = isLegacy ? "pair_events" : "pair_extras";
+  const conflictColumns = isLegacy
+    ? "list_id,user_id,event_type,item_id,kind"
+    : "list_id,user_id,extra_type,item_id,kind";
+  const { error } = await client.from(table).upsert(
     {
       list_id: listId,
       user_id: event.userId,
@@ -566,7 +570,7 @@ export async function saveCloudPairEvent(
       payload: event.payload,
       updated_at: new Date().toISOString(),
     },
-    { onConflict: "list_id,user_id,event_type,item_id,kind" },
+    { onConflict: conflictColumns },
   );
   if (error) throw error;
 }
